@@ -1,0 +1,529 @@
+// cli/client.go
+package cli
+
+import (
+	"bytes"
+	"context"
+	"crypto/rand"
+	"encoding/hex"
+	"encoding/json"
+	"fmt"
+	"io"
+	"net/http"
+	"net/url"
+	"strings"
+)
+
+// Client is a thin HTTP client over taskr's JSON API. It holds no domain
+// logic — every method below is a direct call onto one endpoint, and the
+// CLI never opens a database. That boundary is also why it never shells out
+// to git: git state is something a caller reports, not something taskr (or
+// this client) goes and gets.
+type Client struct {
+	BaseURL string // e.g. "http://127.0.0.1:8099"
+	Key     string // sent unconditionally, empty or not
+	HTTP    *http.Client
+}
+
+// APIError is a non-2xx response. Its Error() is the server's own message,
+// verbatim — a 400 already names the legal values, and wrapping it would
+// only make that harder to read.
+type APIError struct {
+	Status  int
+	Message string
+}
+
+func (e *APIError) Error() string { return e.Message }
+
+func (c *Client) httpClient() *http.Client {
+	if c.HTTP != nil {
+		return c.HTTP
+	}
+	return http.DefaultClient
+}
+
+// newIdempotencyKey returns a fresh retry-safe key for one write. Generated
+// unconditionally on every write call: a CLI invocation is exactly one
+// logical write, so there is never a reason to reuse a key across two.
+func newIdempotencyKey() string {
+	var b [16]byte
+	_, _ = rand.Read(b[:])
+	return hex.EncodeToString(b[:])
+}
+
+// get issues a GET and decodes the JSON response into out.
+func (c *Client) get(ctx context.Context, path string, query url.Values, out any) error {
+	body, err := c.do(ctx, http.MethodGet, path, query, nil)
+	if err != nil {
+		return err
+	}
+	if out == nil || len(body) == 0 {
+		return nil
+	}
+	return json.Unmarshal(body, out)
+}
+
+// write issues a POST or PATCH carrying reqBody as JSON, with a fresh
+// Idempotency-Key, and decodes the response into out (when out is non-nil
+// and the response carries a body — several writes answer 204).
+func (c *Client) write(ctx context.Context, method, path string, reqBody, out any) error {
+	body, err := c.doWrite(ctx, method, path, reqBody)
+	if err != nil {
+		return err
+	}
+	if out == nil || len(body) == 0 {
+		return nil
+	}
+	return json.Unmarshal(body, out)
+}
+
+func (c *Client) doWrite(ctx context.Context, method, path string, reqBody any) ([]byte, error) {
+	buf, err := json.Marshal(reqBody)
+	if err != nil {
+		return nil, fmt.Errorf("taskr: encoding request: %w", err)
+	}
+	return c.doRaw(ctx, method, path, nil, buf, true)
+}
+
+func (c *Client) do(ctx context.Context, method, path string, query url.Values, reqBody []byte) ([]byte, error) {
+	return c.doRaw(ctx, method, path, query, reqBody, false)
+}
+
+func (c *Client) doRaw(ctx context.Context, method, path string, query url.Values, reqBody []byte, isWrite bool) ([]byte, error) {
+	u := strings.TrimRight(c.BaseURL, "/") + path
+	if len(query) > 0 {
+		u += "?" + query.Encode()
+	}
+
+	var reader io.Reader
+	if reqBody != nil {
+		reader = bytes.NewReader(reqBody)
+	}
+
+	req, err := http.NewRequestWithContext(ctx, method, u, reader)
+	if err != nil {
+		return nil, err
+	}
+	if reqBody != nil {
+		req.Header.Set("Content-Type", "application/json")
+	}
+	if isWrite {
+		req.Header.Set("Idempotency-Key", newIdempotencyKey())
+	}
+	// Sent unconditionally, empty or not: nothing about auth changes when a
+	// host starts requiring a key.
+	req.Header.Set("X-Taskr-Key", c.Key)
+
+	resp, err := c.httpClient().Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("taskr: %w", err)
+	}
+	defer resp.Body.Close()
+
+	respBody, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, fmt.Errorf("taskr: reading response: %w", err)
+	}
+
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return nil, &APIError{Status: resp.StatusCode, Message: serverMessage(resp.StatusCode, respBody)}
+	}
+	return respBody, nil
+}
+
+// serverMessage extracts the human-readable message from an error response.
+// The auth endpoints answer with {"error": "..."}; every other failing
+// write or read answers with http.Error's plain text (the domain's message
+// plus a trailing newline). Either way the caller gets one clean line.
+func serverMessage(status int, body []byte) string {
+	var withError struct {
+		Error string `json:"error"`
+	}
+	if json.Unmarshal(body, &withError) == nil && withError.Error != "" {
+		return withError.Error
+	}
+	if msg := strings.TrimSpace(string(body)); msg != "" {
+		return msg
+	}
+	return http.StatusText(status)
+}
+
+// --- Reads ---
+
+func (c *Client) AuthStatus(ctx context.Context) (authStatus, error) {
+	var v authStatus
+	err := c.get(ctx, "/api/auth/status", nil, &v)
+	return v, err
+}
+
+// ContextQuery is what `taskr context` reports about where the caller is.
+//
+// RemoteURL and Subpath are what let taskr resolve a project through the
+// same locator a write resolves through — without Subpath a monorepo
+// directory can never name its project here, only on a write, which is
+// exactly the gap that let context go silent instead of reporting the
+// ambiguity a write would refuse on. HeadSHA is what lets taskr record the
+// observation rot detection is built on. None of these are collected by
+// running git — that boundary is why taskr has no integration to break —
+// so they are omitted whenever the caller does not already know them.
+type ContextQuery struct {
+	Machine string
+	// AgentSessionID is what makes this invocation's context its own.
+	// park and end resolve their session through here, so leaving it off a
+	// machine running two agents files one agent's resume note against the
+	// other's issue.
+	AgentSessionID string
+	CWD            string
+	RemoteURL      string
+	Subpath        string
+	HeadSHA        string
+}
+
+// Context is the HTTP mirror of the taskr_context MCP tool.
+func (c *Client) Context(ctx context.Context, in ContextQuery) (ContextView, error) {
+	q := url.Values{}
+	setIf(q, "machine", in.Machine)
+	setIf(q, "agent_session_id", in.AgentSessionID)
+	setIf(q, "cwd", in.CWD)
+	setIf(q, "remote_url", in.RemoteURL)
+	setIf(q, "subpath", in.Subpath)
+	setIf(q, "head_sha", in.HeadSHA)
+	var v ContextView
+	err := c.get(ctx, "/api/context", q, &v)
+	return v, err
+}
+
+// Next returns the ranked candidate list, scoped to the caller's project
+// unless all is set. untriaged drops the actionable-verdict gate, which is
+// how the caller sees work that has been filed but not yet triaged.
+func (c *Client) Next(ctx context.Context, machine string, loc Locator, all, untriaged bool) ([]Candidate, error) {
+	q := url.Values{}
+	setIf(q, "machine", machine)
+	setIf(q, "remote_url", loc.RemoteURL)
+	setIf(q, "subpath", loc.Subpath)
+	if all {
+		q.Set("all", "1")
+	}
+	if untriaged {
+		q.Set("include_untriaged", "1")
+	}
+	var v []Candidate
+	err := c.get(ctx, "/api/next", q, &v)
+	return v, err
+}
+
+// ListIssues searches issues by free text and status, scoped to the
+// caller's project unless all is set.
+func (c *Client) ListIssues(ctx context.Context, query string, status []string, loc Locator, all bool) ([]SearchResult, error) {
+	q := url.Values{}
+	setIf(q, "q", query)
+	for _, s := range status {
+		q.Add("status", s)
+	}
+	setIf(q, "remote_url", loc.RemoteURL)
+	setIf(q, "subpath", loc.Subpath)
+	if all {
+		q.Set("all", "1")
+	}
+	var v []SearchResult
+	err := c.get(ctx, "/api/issues", q, &v)
+	return v, err
+}
+
+// GetIssue fetches one issue by id or human ref (e.g. "TSK-12").
+func (c *Client) GetIssue(ctx context.Context, ref string, agentContext bool) (IssueView, error) {
+	q := url.Values{}
+	if agentContext {
+		q.Set("agent_context", "1")
+	}
+	var v IssueView
+	err := c.get(ctx, "/api/issues/"+url.PathEscape(ref), q, &v)
+	return v, err
+}
+
+// ListDocuments returns the documents linked to one issue.
+func (c *Client) ListDocuments(ctx context.Context, ref string) ([]DocumentRef, error) {
+	var v []DocumentRef
+	err := c.get(ctx, "/api/issues/"+url.PathEscape(ref)+"/documents", nil, &v)
+	return v, err
+}
+
+// Timeline returns one issue's event ledger, in stream order.
+func (c *Client) Timeline(ctx context.Context, ref string) ([]TimelineEntry, error) {
+	var v []TimelineEntry
+	err := c.get(ctx, "/api/issues/"+url.PathEscape(ref)+"/timeline", nil, &v)
+	return v, err
+}
+
+// --- Writes ---
+
+// CreateIssueInput is the wire shape POST /api/issues accepts.
+//
+// ProjectSlug, when set, wins over Locator server-side — an explicit
+// --project is more deliberate than wherever the caller happens to be
+// standing. Locator carries the fallback: the repo and directory a caller
+// never named a project for.
+type CreateIssueInput struct {
+	Title       string  `json:"title"`
+	Description string  `json:"description,omitempty"`
+	Kind        string  `json:"kind,omitempty"`
+	Priority    string  `json:"priority,omitempty"`
+	ProjectSlug string  `json:"project,omitempty"`
+	Locator     Locator `json:"locator,omitempty"`
+}
+
+func (c *Client) CreateIssue(ctx context.Context, in CreateIssueInput) (IssueRef, error) {
+	var v IssueRef
+	err := c.write(ctx, http.MethodPost, "/api/issues", in, &v)
+	return v, err
+}
+
+// AddComment posts a comment on an issue.
+// UpsertDocumentInput is the wire shape POST /api/documents accepts. It is
+// spelled upsert rather than create because DocumentID revises an existing
+// document instead of opening a second one — the same call attaches a spec
+// and later replaces its body.
+//
+// There is deliberately no Actor field. Authorship comes from the key in
+// TASKR_KEY and a body that claims otherwise is ignored (518c0ac), so
+// carrying one here would only invite a caller to believe it worked.
+type UpsertDocumentInput struct {
+	DocumentID  string `json:"document_id,omitempty"`
+	Type        string `json:"type"`
+	Title       string `json:"title"`
+	Body        string `json:"body"`
+	DiffSummary string `json:"diff_summary,omitempty"`
+	LinkIssue   string `json:"link_issue,omitempty"`
+}
+
+// DocumentView is one document with its body, for `taskr doc show`.
+type DocumentView struct {
+	ID           string   `json:"id"`
+	Type         string   `json:"type"`
+	Title        string   `json:"title"`
+	Body         string   `json:"body"`
+	Revisions    int      `json:"revisions"`
+	SupersededBy string   `json:"superseded_by,omitempty"`
+	CreatedAt    string   `json:"created_at"`
+	UpdatedAt    string   `json:"updated_at"`
+	LinkedIssues []string `json:"linked_issues,omitempty"`
+}
+
+func (c *Client) UpsertDocument(ctx context.Context, in UpsertDocumentInput) (DocumentRef, error) {
+	var out DocumentRef
+	err := c.write(ctx, http.MethodPost, "/api/documents", in, &out)
+	return out, err
+}
+
+func (c *Client) GetDocument(ctx context.Context, id string) (DocumentView, error) {
+	var v DocumentView
+	err := c.get(ctx, "/api/documents/"+url.PathEscape(id), nil, &v)
+	return v, err
+}
+
+// UpdateIssueInput is the subset of PATCH /api/issues/{ref} the CLI sends.
+// The endpoint takes more than this; a field left empty is untouched
+// server-side, so `close` sends only what closing means.
+type UpdateIssueInput struct {
+	Status     string `json:"status,omitempty"`
+	Resolution string `json:"resolution,omitempty"`
+}
+
+// UpdateIssue is the write behind `taskr close`. It is spelled generally
+// rather than as CloseIssue because the endpoint is general: a later verb
+// that reprioritises or reopens has the method it needs already.
+//
+// The result carries a GroupHint when the closed issue belongs to a group —
+// the parent to check back on, and the sibling to pick up next — so the
+// caller never has to fetch the issue a second time just to learn that.
+func (c *Client) UpdateIssue(ctx context.Context, ref string, in UpdateIssueInput) (UpdateIssueResult, error) {
+	var out UpdateIssueResult
+	err := c.write(ctx, http.MethodPatch, "/api/issues/"+url.PathEscape(ref), in, &out)
+	return out, err
+}
+
+// AddChild adds an existing issue to a group.
+func (c *Client) AddChild(ctx context.Context, parent, child string) error {
+	req := struct {
+		Child string `json:"child"`
+	}{Child: child}
+	return c.write(ctx, http.MethodPost, "/api/issues/"+url.PathEscape(parent)+"/children", req, nil)
+}
+
+// RemoveChild takes an issue out of a group. The issue itself lives on.
+func (c *Client) RemoveChild(ctx context.Context, parent, child string) error {
+	return c.write(ctx, http.MethodDelete,
+		"/api/issues/"+url.PathEscape(parent)+"/children/"+url.PathEscape(child), struct{}{}, nil)
+}
+
+func (c *Client) AddComment(ctx context.Context, ref, body string) error {
+	req := struct {
+		Body string `json:"body"`
+	}{Body: body}
+	return c.write(ctx, http.MethodPost, "/api/issues/"+url.PathEscape(ref)+"/comments", req, nil)
+}
+
+// StartWorkInput is the wire shape POST /api/work/start accepts.
+//
+// AgentSessionID is not optional the way it reads. Sessions are keyed by
+// machine, so a start that names no agent session adopts whatever session
+// is already live there — including a running MCP agent's, which then
+// carries a FocusSwitched onto an issue it knows nothing about. Sending an
+// id makes this invocation a unit of work in its own right.
+type StartWorkInput struct {
+	Issue          string `json:"issue"`
+	Machine        string `json:"machine"`
+	Agent          string `json:"agent,omitempty"`
+	AgentSessionID string `json:"agent_session_id,omitempty"`
+	CWD            string `json:"cwd,omitempty"`
+}
+
+func (c *Client) StartWork(ctx context.Context, in StartWorkInput) (ResumePacket, error) {
+	var v ResumePacket
+	err := c.write(ctx, http.MethodPost, "/api/work/start", in, &v)
+	return v, err
+}
+
+// ParkWorkInput is the wire shape POST /api/work/park accepts.
+type ParkWorkInput struct {
+	SessionID  string `json:"session_id"`
+	Reason     string `json:"reason,omitempty"`
+	ResumeNote string `json:"resume_note,omitempty"`
+}
+
+func (c *Client) ParkWork(ctx context.Context, in ParkWorkInput) error {
+	return c.write(ctx, http.MethodPost, "/api/work/park", in, nil)
+}
+
+// EndWorkInput is the wire shape POST /api/work/end accepts.
+type EndWorkInput struct {
+	SessionID string `json:"session_id"`
+	Reason    string `json:"reason,omitempty"`
+}
+
+func (c *Client) EndWork(ctx context.Context, in EndWorkInput) error {
+	return c.write(ctx, http.MethodPost, "/api/work/end", in, nil)
+}
+
+// OffloadInput is the wire shape POST /api/offload accepts.
+//
+// ProjectSlug, when set, wins over both the session's project and Locator —
+// the discovered work may not belong to whatever the caller is currently
+// working on. Locator is the fallback for an offload made before any
+// session exists, when there is nothing else to inherit a project from.
+type OffloadInput struct {
+	SessionID   string  `json:"session_id"`
+	Title       string  `json:"title"`
+	Brief       string  `json:"brief"`
+	Kind        string  `json:"kind,omitempty"`
+	Severity    string  `json:"severity,omitempty"`
+	ProjectSlug string  `json:"project,omitempty"`
+	Locator     Locator `json:"locator,omitempty"`
+}
+
+func (c *Client) Offload(ctx context.Context, in OffloadInput) (OffloadResult, error) {
+	var v OffloadResult
+	err := c.write(ctx, http.MethodPost, "/api/offload", in, &v)
+	return v, err
+}
+
+// SubmitTriageInput is the wire shape POST /api/triage/{ref} accepts.
+type SubmitTriageInput struct {
+	Verdict     string `json:"verdict"`
+	Evidence    string `json:"evidence,omitempty"`
+	DuplicateOf string `json:"duplicate_of,omitempty"`
+}
+
+func (c *Client) SubmitTriage(ctx context.Context, ref string, in SubmitTriageInput) error {
+	return c.write(ctx, http.MethodPost, "/api/triage/"+url.PathEscape(ref), in, nil)
+}
+
+// --- Projects ---
+
+// SetupProjectInput is the wire shape POST /api/projects accepts. `project
+// init` never sends Repos or Conventions — attaching a repo or a directory
+// is `project attach`'s job, kept as its own step so a caller onboarding a
+// second directory never has to repeat the project's key.
+type SetupProjectInput struct {
+	Slug string `json:"slug"`
+	Name string `json:"name,omitempty"`
+	Key  string `json:"key"`
+}
+
+// SetupProjectResult is what `project init` needs back: enough to confirm
+// the project exists, plus the CLAUDE.md snippet an agent pastes into the
+// repo it just onboarded.
+type SetupProjectResult struct {
+	ProjectID       string `json:"project_id"`
+	Key             string `json:"key"`
+	ClaudeMDSnippet string `json:"claude_md_snippet"`
+}
+
+func (c *Client) SetupProject(ctx context.Context, in SetupProjectInput) (SetupProjectResult, error) {
+	var v SetupProjectResult
+	err := c.write(ctx, http.MethodPost, "/api/projects", in, &v)
+	return v, err
+}
+
+// ListProjects returns every registered project, repos and dirs included —
+// `project ls` is what an agent reads to decide whether a project already
+// covers where it is standing.
+func (c *Client) ListProjects(ctx context.Context) ([]ProjectView, error) {
+	var v []ProjectView
+	err := c.get(ctx, "/api/projects", nil, &v)
+	return v, err
+}
+
+// AttachRepoInput is the wire shape POST /api/projects/{slug}/repos accepts.
+// It is distinct from the app-layer type of the same name — the CLI is an
+// HTTP client and nothing else, and never imports internal/app.
+type AttachRepoInput struct {
+	RemoteURL     string `json:"remote_url"`
+	DefaultBranch string `json:"default_branch,omitempty"`
+	Subpath       string `json:"subpath,omitempty"`
+	Machine       string `json:"machine,omitempty"`
+}
+
+func (c *Client) AttachRepo(ctx context.Context, slug string, in AttachRepoInput) error {
+	return c.write(ctx, http.MethodPost, "/api/projects/"+url.PathEscape(slug)+"/repos", in, nil)
+}
+
+// RenameProject changes a project's slug and, when name is non-empty, its
+// display name too.
+func (c *Client) RenameProject(ctx context.Context, slug, newSlug, name string) error {
+	req := struct {
+		Slug string `json:"slug"`
+		Name string `json:"name,omitempty"`
+	}{Slug: newSlug, Name: name}
+	return c.write(ctx, http.MethodPost, "/api/projects/"+url.PathEscape(slug)+"/rename", req, nil)
+}
+
+// Login confirms key is accepted by the target host before authLogin writes
+// it to disk. The CLI itself never needs a session cookie — every request
+// already carries X-Taskr-Key — so this used to be a side effect of hitting
+// POST /api/auth/login with the key in the body, purely for the live round
+// trip that failed on a bad key.
+//
+// That endpoint no longer accepts a key at all: browser-auth deletes the
+// key-for-cookie exchange rather than deprecating it, since a session must
+// now come from a password login. GET /api/auth/status, presenting key as
+// an X-Taskr-Key header, is the same live round trip without depending on
+// the endpoint this phase removes — it 401s (Authenticated: false) on a bad
+// key exactly as the old call errored on one.
+func (c *Client) Login(ctx context.Context, key string) error {
+	probe := &Client{BaseURL: c.BaseURL, Key: key, HTTP: c.HTTP}
+	status, err := probe.AuthStatus(ctx)
+	if err != nil {
+		return err
+	}
+	if !status.Authenticated {
+		return &APIError{Status: http.StatusUnauthorized, Message: "key was not accepted"}
+	}
+	return nil
+}
+
+func setIf(q url.Values, key, value string) {
+	if value != "" {
+		q.Set(key, value)
+	}
+}
