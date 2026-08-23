@@ -85,6 +85,36 @@ human-readable prose, which matters most for `taskr start` — the resume
 packet is the product, not a data dump. Run `taskr help` for the full
 command reference.
 
+## Checks
+
+A check is a done-when — a constraint that gates `taskr close`. Register
+checks to enforce preconditions before closing (e.g., test coverage, load
+benchmarks, manual review). taskr never runs the procedure itself: someone
+carries it out by hand, then calls `check run` to record what happened.
+
+```bash
+taskr check add <ref> -m <procedure> [--expect <text>] [--human]
+taskr check ls <ref>
+taskr check run <id> --pass|--fail [--measure metric=value[unit]]
+taskr close <ref> [--despite-checks]
+```
+
+Example:
+
+```bash
+taskr check add TSK-9 -m "hey -z 30s -c 50 GET /api/issues" --expect "> 100 r/s" --human
+```
+
+- `taskr check add <ref> -m <procedure> --expect <expectation>` — register a
+  check. `--human` sets its runner to human instead of agent, naming who
+  should carry out the procedure — not who runs `check run`.
+- `taskr check ls <ref>` — list an issue's checks, with the id `check run`
+  needs.
+- `taskr check run <id> --pass|--fail` — record a result against a check id
+  (from `check add`'s output or `check ls`).
+- `taskr close <ref> --despite-checks` — close even though checks are
+  pending; each pending check is recorded as skipped.
+
 ## Configuration
 
 Config lives at `$XDG_CONFIG_HOME/taskr/hosts.json` (falling back to

@@ -111,6 +111,7 @@ type IssueView struct {
 	AgentContext []AgentContextEntry `json:"agent_context,omitempty"`
 	Group        *GroupBlock         `json:"group,omitempty"`
 	Parent       *ParentBlock        `json:"parent,omitempty"`
+	Checks       []CheckView         `json:"checks,omitempty"`
 }
 
 // SearchResult is the compact row `ls` renders. It never carries the
@@ -298,4 +299,86 @@ type authStatus struct {
 		Writable    bool   `json:"writable"`
 		TrialEndsAt string `json:"trial_ends_at,omitempty"`
 	} `json:"billing,omitempty"`
+}
+
+// --- Checks (TSK-90) ---
+
+// Measurement is one typed number a check run records.
+type Measurement struct {
+	Metric     string  `json:"metric"`
+	Value      float64 `json:"value"`
+	Unit       string  `json:"unit,omitempty"`
+	Conditions string  `json:"conditions,omitempty"`
+}
+
+// DefineCheckInput is POST /api/issues/{ref}/checks' body.
+type DefineCheckInput struct {
+	Title     string `json:"title"`
+	Procedure string `json:"procedure,omitempty"`
+	Expect    string `json:"expect,omitempty"`
+	Runner    string `json:"runner,omitempty"`
+}
+
+// CheckRef names a created check and the issue it belongs to.
+type CheckRef struct {
+	ID    string   `json:"id"`
+	Issue IssueRef `json:"issue"`
+}
+
+// RunView is one recorded run.
+type RunView struct {
+	ID            string        `json:"id"`
+	Outcome       string        `json:"outcome"`
+	Measurements  []Measurement `json:"measurements,omitempty"`
+	EvidenceDocID string        `json:"evidence_doc_id,omitempty"`
+	HeadSHA       string        `json:"head_sha,omitempty"`
+	Image         string        `json:"image,omitempty"`
+	Note          string        `json:"note,omitempty"`
+	Actor         string        `json:"actor,omitempty"`
+	RecordedAt    string        `json:"recorded_at,omitempty"`
+}
+
+// RunCheckInput is POST /api/checks/{id}/runs' body.
+type RunCheckInput struct {
+	Outcome       string        `json:"outcome"`
+	Measurements  []Measurement `json:"measurements,omitempty"`
+	EvidenceDocID string        `json:"evidence_doc_id,omitempty"`
+	HeadSHA       string        `json:"head_sha,omitempty"`
+	Image         string        `json:"image,omitempty"`
+	Note          string        `json:"note,omitempty"`
+}
+
+// CheckView is one check with its latest run.
+type CheckView struct {
+	ID        string   `json:"id"`
+	Title     string   `json:"title"`
+	Procedure string   `json:"procedure,omitempty"`
+	Expect    string   `json:"expect,omitempty"`
+	Runner    string   `json:"runner"`
+	Status    string   `json:"status"`
+	CreatedAt string   `json:"created_at"`
+	LatestRun *RunView `json:"latest_run,omitempty"`
+}
+
+// PendingCheck is one check waiting to pass, with its issue.
+type PendingCheck struct {
+	IssueID    string `json:"issue_id"`
+	IssueRef   string `json:"issue_ref"`
+	IssueTitle string `json:"issue_title"`
+	CheckID    string `json:"check_id"`
+	Title      string `json:"title"`
+	Runner     string `json:"runner"`
+}
+
+// PendingChecksBody is the 409 a close over pending checks answers with.
+type PendingChecksBody struct {
+	Error         string             `json:"error"`
+	PendingChecks []PendingCheckItem `json:"pending_checks"`
+}
+
+// PendingCheckItem is one pending check as the 409 names it.
+type PendingCheckItem struct {
+	ID     string `json:"id"`
+	Title  string `json:"title"`
+	Runner string `json:"runner"`
 }

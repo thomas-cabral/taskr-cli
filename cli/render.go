@@ -268,6 +268,25 @@ func RenderDocuments(w io.Writer, rows []DocumentRef) {
 	tw.Flush()
 }
 
+// RenderChecks renders `taskr check ls`: an issue's checks, with the
+// outcome and date of the latest run so a reader can tell what still
+// needs one without opening each check.
+func RenderChecks(w io.Writer, checks []CheckView) {
+	tw := tabwriter.NewWriter(w, 0, 2, 2, ' ', 0)
+	fmt.Fprintln(tw, "ID\tTITLE\tRUNNER\tSTATUS\tLAST RUN")
+	for _, c := range checks {
+		last := "—"
+		if c.LatestRun != nil {
+			last = c.LatestRun.Outcome
+			if c.LatestRun.RecordedAt != "" {
+				last += " " + c.LatestRun.RecordedAt[:10]
+			}
+		}
+		fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\n", c.ID, c.Title, c.Runner, c.Status, last)
+	}
+	tw.Flush()
+}
+
 // RenderDocument prints one document for reading. The header is one line so
 // the body starts at the top of the terminal — a spec is read, not scanned,
 // and anything above it is in the way. Revisions and the superseding

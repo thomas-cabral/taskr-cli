@@ -31,6 +31,11 @@ type Client struct {
 type APIError struct {
 	Status  int
 	Message string
+	// Body is the raw response body. Structured refusals — a close's 409
+	// with pending_checks — carry more than one line, and serverMessage
+	// keeps only the line; callers that can act on the structure decode
+	// this instead.
+	Body []byte
 }
 
 func (e *APIError) Error() string { return e.Message }
@@ -126,7 +131,7 @@ func (c *Client) doRaw(ctx context.Context, method, path string, query url.Value
 	}
 
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return nil, &APIError{Status: resp.StatusCode, Message: serverMessage(resp.StatusCode, respBody)}
+		return nil, &APIError{Status: resp.StatusCode, Message: serverMessage(resp.StatusCode, respBody), Body: respBody}
 	}
 	return respBody, nil
 }
@@ -325,8 +330,9 @@ func (c *Client) GetDocument(ctx context.Context, id string) (DocumentView, erro
 // The endpoint takes more than this; a field left empty is untouched
 // server-side, so `close` sends only what closing means.
 type UpdateIssueInput struct {
-	Status     string `json:"status,omitempty"`
-	Resolution string `json:"resolution,omitempty"`
+	Status        string `json:"status,omitempty"`
+	Resolution    string `json:"resolution,omitempty"`
+	DespiteChecks bool   `json:"despite_checks,omitempty"`
 }
 
 // UpdateIssue is the write behind `taskr close`. It is spelled generally
@@ -425,6 +431,46 @@ func (c *Client) Offload(ctx context.Context, in OffloadInput) (OffloadResult, e
 	var v OffloadResult
 	err := c.write(ctx, http.MethodPost, "/api/offload", in, &v)
 	return v, err
+}
+
+// --- Checks (TSK-90) ---
+
+// DefineCheck adds a done-when to an issue.
+func (c *Client) DefineCheck(ctx context.Context, ref string, in DefineCheckInput) (CheckRef, error) {
+	var out CheckRef
+	err := c.write(ctx, http.MethodPost, "/api/issues/"+url.PathEscape(ref)+"/checks", in, &out)
+	return out, err
+}
+
+// ListChecks reads an issue's checks with their latest runs.
+func (c *Client) ListChecks(ctx context.Context, ref string) ([]CheckView, error) {
+	var out []CheckView
+	err := c.get(ctx, "/api/issues/"+url.PathEscape(ref)+"/checks", nil, &out)
+	return out, err
+}
+
+// RunCheck records one execution of a check.
+func (c *Client) RunCheck(ctx context.Context, checkID string, in RunCheckInput) (RunView, error) {
+	var out RunView
+	err := c.write(ctx, http.MethodPost, "/api/checks/"+url.PathEscape(checkID)+"/runs", in, &out)
+	return out, err
+}
+
+// PendingChecks lists checks that have not passed, scoped like Next.
+// runner narrows to "agent" or "human"; empty means both.
+func (c *Client) PendingChecks(ctx context.Context, runner string, loc Locator, all bool) ([]PendingCheck, error) {
+	q := url.Values{}
+	if runner != "" {
+		q.Set("runner", runner)
+	}
+	if all {
+		q.Set("all", "1")
+	}
+	setIf(q, "remote_url", loc.RemoteURL)
+	setIf(q, "subpath", loc.Subpath)
+	var out []PendingCheck
+	err := c.get(ctx, "/api/checks/pending", q, &out)
+	return out, err
 }
 
 // SubmitTriageInput is the wire shape POST /api/triage/{ref} accepts.
