@@ -29,6 +29,22 @@ func TestParseMeasure(t *testing.T) {
 	if _, err := parseMeasure("m=notanumber", ""); err == nil {
 		t.Fatal("non-numeric accepted")
 	}
+	if _, err := parseMeasure("m=1e309", ""); err == nil {
+		t.Fatal("out-of-range value accepted")
+	}
+	if _, err := parseMeasure("m=+Inf", ""); err == nil {
+		t.Fatal("+Inf accepted")
+	}
+	if _, err := parseMeasure("m=NaN", ""); err == nil {
+		t.Fatal("NaN accepted")
+	}
+	m, err = parseMeasure("m=-0.5s", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if m.Value != -0.5 || m.Unit != "s" {
+		t.Fatalf("negative with unit: %+v", m)
+	}
 }
 
 // TestCheckAdd exercises `check add` end to end: --human maps to

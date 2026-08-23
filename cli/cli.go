@@ -8,6 +8,7 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"math"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -768,10 +769,19 @@ func parseMeasure(s, conditions string) (Measurement, error) {
 	if rest == "" {
 		return Measurement{}, fmt.Errorf("--measure %s has no value", metric)
 	}
+	// Parse the whole string first: shrinking below can find a numeric
+	// prefix that fits float64 (e.g. "1e30" out of "1e309") and silently
+	// hide that the value as written is out of range.
+	if _, err := strconv.ParseFloat(rest, 64); err != nil && errors.Is(err, strconv.ErrRange) {
+		return Measurement{}, fmt.Errorf("--measure %s: %q is out of range for a float64", metric, rest)
+	}
 	// Longest numeric prefix: try the whole string, then shrink.
 	for end := len(rest); end > 0; end-- {
 		v, err := strconv.ParseFloat(rest[:end], 64)
 		if err == nil {
+			if math.IsInf(v, 0) || math.IsNaN(v) {
+				return Measurement{}, fmt.Errorf("--measure %s: %v is not a finite number", metric, v)
+			}
 			return Measurement{Metric: metric, Value: v, Unit: rest[end:], Conditions: conditions}, nil
 		}
 	}
