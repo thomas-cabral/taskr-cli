@@ -1023,10 +1023,14 @@ func authStatusCmd(args []string, stdout, stderr io.Writer, getenv func(string) 
 		// print a slightly wrong date.
 		case b.Status == "trial" && len(b.TrialEndsAt) >= 10:
 			line = "trial, ends " + b.TrialEndsAt[:10]
+		// Both locked cases say nothing has been deleted, because this
+		// command is where someone comes to find out why everything stopped
+		// working — and "trial expired" alone reads as "your work is gone"
+		// to someone who has just been refused all of it.
 		case b.Status == "trial_expired":
-			line = "trial expired — writes are paused; subscribe from the web app"
+			line = "trial expired — this org is locked; subscribe from the web app. Nothing has been deleted"
 		case b.Status == "lapsed":
-			line = "subscription lapsed — writes are paused; manage billing from the web app"
+			line = "subscription lapsed — this org is locked; manage billing from the web app. Nothing has been deleted"
 		}
 		fmt.Fprintf(stdout, "plan      %s\n", line)
 	}
