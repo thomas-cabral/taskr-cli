@@ -85,6 +85,32 @@ human-readable prose, which matters most for `taskr start` — the resume
 packet is the product, not a data dump. Run `taskr help` for the full
 command reference.
 
+## Checks
+
+A check is a done-when — a constraint that gates `taskr close`. Register
+checks to enforce preconditions before closing (e.g., test coverage, load
+benchmarks, manual review), then run them and override with `--despite-checks`
+if needed.
+
+```bash
+taskr check add <ref> -m <command> --expect <expectation> [--human]
+taskr check ls <ref>
+taskr check run <ref>
+taskr close <ref> [--despite-checks]
+```
+
+Example:
+
+```bash
+taskr check add TSK-9 -m "hey -z 30s -c 50 GET /api/issues" --expect "> 100 r/s" --human
+```
+
+- `taskr check add <ref> -m <command> --expect <expectation>` — register a
+  check. The command is executed by the runner (`--human` flags it as manual).
+- `taskr check ls <ref>` — list all checks on an issue.
+- `taskr check run <ref>` — run all pending checks.
+- `taskr close <ref> --despite-checks` — close the issue despite failed checks.
+
 ## Configuration
 
 Config lives at `$XDG_CONFIG_HOME/taskr/hosts.json` (falling back to
