@@ -8,6 +8,7 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"net/http"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -387,6 +388,15 @@ func cmdNext(ctx context.Context, c *Client, args []string, stdout, stderr io.Wr
 		}
 	}
 	RenderCandidates(stdout, rows)
+	// Pending human-run checks are work only a person can move; the agent
+	// queue above never ranks them. Errors are swallowed: this is a
+	// courtesy block after the real answer, same rule as liveSessionOn.
+	if human, err := c.PendingChecks(ctx, "human", loc, *all); err == nil && len(human) > 0 {
+		fmt.Fprintln(stdout, "\nNeeds a human:")
+		for _, p := range human {
+			fmt.Fprintf(stdout, "  %s — %s (`taskr check run %s --pass|--fail`)\n", p.IssueRef, p.Title, p.CheckID)
+		}
+	}
 	return nil
 }
 
@@ -432,6 +442,10 @@ func cmdShow(ctx context.Context, c *Client, args []string, stdout, stderr io.Wr
 		return printJSON(stdout, v)
 	}
 	fmt.Fprint(stdout, RenderIssue(v, *withContext))
+	if len(v.Checks) > 0 {
+		fmt.Fprintln(stdout, "\nChecks:")
+		RenderChecks(stdout, v.Checks)
+	}
 	return nil
 }
 
@@ -583,6 +597,7 @@ func cmdClose(ctx context.Context, c *Client, args []string, stdout, stderr io.W
 	fs := flag.NewFlagSet("close", flag.ContinueOnError)
 	fs.SetOutput(stderr)
 	resolution := fs.String("r", "", "how it ended, recorded on the issue")
+	despite := fs.Bool("despite-checks", false, "close even though checks are pending; each is recorded as skipped")
 	jsonOut := fs.Bool("json", false, "output JSON")
 	positional, err := parseFlags(fs, args)
 	if err != nil {
@@ -593,8 +608,20 @@ func cmdClose(ctx context.Context, c *Client, args []string, stdout, stderr io.W
 	}
 	ref := positional[0]
 
-	out, err := c.UpdateIssue(ctx, ref, UpdateIssueInput{Status: "closed", Resolution: *resolution})
+	out, err := c.UpdateIssue(ctx, ref, UpdateIssueInput{Status: "closed", Resolution: *resolution, DespiteChecks: *despite})
 	if err != nil {
+		var apiErr *APIError
+		if errors.As(err, &apiErr) && apiErr.Status == http.StatusConflict {
+			var body PendingChecksBody
+			if json.Unmarshal(apiErr.Body, &body) == nil && len(body.PendingChecks) > 0 {
+				fmt.Fprintf(stderr, "%s has pending checks:\n", ref)
+				for _, p := range body.PendingChecks {
+					fmt.Fprintf(stderr, "  %s (%s) — run it with `taskr check run %s --pass|--fail`\n", p.Title, p.Runner, p.ID)
+				}
+				fmt.Fprintf(stderr, "Run them, or close anyway with `taskr close %s --despite-checks`.\n", ref)
+				return fmt.Errorf("close refused: %d checks pending", len(body.PendingChecks))
+			}
+		}
 		return err
 	}
 	if out.Ref != "" {
