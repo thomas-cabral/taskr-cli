@@ -501,3 +501,194 @@ func TestAStoredLocalCurrentHostStaysPlaintext(t *testing.T) {
 		t.Errorf("BaseURL = %q, want http for loopback", got.BaseURL)
 	}
 }
+
+// TestALegacyHostNamedHostsDoesNotShadowOtherHosts pins the fix-round-1
+// finding: a legacy flat-map file that happens to have a host literally
+// named "hosts" must not be misread as the modern shape and silently drop
+// every other host in the file. The disambiguation goes by the top-level
+// key set — "real.example" is not "current" or "hosts", so this whole file
+// is legacy — not by whether "hosts" decodes to something non-nil.
+func TestALegacyHostNamedHostsDoesNotShadowOtherHosts(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("XDG_CONFIG_HOME", dir)
+	if err := os.MkdirAll(filepath.Join(dir, "taskr"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(dir, "taskr", "hosts.json")
+	if err := os.WriteFile(path, []byte(`{"hosts":{},"real.example":{"key":"k2"}}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	got, err := loadHosts(io.Discard)
+	if err != nil {
+		t.Fatalf("loadHosts: %v", err)
+	}
+	if got.Hosts["real.example"].Key != "k2" {
+		t.Errorf("Hosts[real.example].Key = %q, want k2 — a host literally named \"hosts\" must not shadow it",
+			got.Hosts["real.example"].Key)
+	}
+}
+
+// TestModernHostsKeyWithNoOtherEntriesReadsAsEmpty covers the other side of
+// that disambiguation: a file whose only top-level keys are "current"
+// and/or "hosts" is modern even when "hosts" is an empty object — there is
+// nothing outside the allowed key set to make it legacy.
+func TestModernHostsKeyWithNoOtherEntriesReadsAsEmpty(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("XDG_CONFIG_HOME", dir)
+	if err := os.MkdirAll(filepath.Join(dir, "taskr"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "taskr", "hosts.json"), []byte(`{"hosts":{}}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	got, err := loadHosts(io.Discard)
+	if err != nil {
+		t.Fatalf("loadHosts: %v", err)
+	}
+	if len(got.Hosts) != 0 {
+		t.Errorf("Hosts = %v, want empty", got.Hosts)
+	}
+}
+
+// TestNullHostsDoesNotFabricateAPhantomHost pins the other reviewer finding
+// from fix round 1: {"hosts":null} used to be misread as legacy (since
+// modern.Hosts came back nil) and then, because unmarshaling JSON null into
+// a struct map value is a no-op rather than an error, produced a phantom
+// host literally named "hosts" with an empty key. The key-set
+// disambiguation reads this as modern instead, so Hosts is simply empty.
+func TestNullHostsDoesNotFabricateAPhantomHost(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("XDG_CONFIG_HOME", dir)
+	if err := os.MkdirAll(filepath.Join(dir, "taskr"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "taskr", "hosts.json"), []byte(`{"hosts":null}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	got, err := loadHosts(io.Discard)
+	if err != nil {
+		t.Fatalf("loadHosts: %v", err)
+	}
+	if len(got.Hosts) != 0 {
+		t.Errorf("Hosts = %v, want empty — null hosts must not fabricate an entry named \"hosts\"", got.Hosts)
+	}
+}
+
+// TestCurrentWithNullHostsDoesNotFail pins the last reviewer finding:
+// {"current":"x","hosts":null} used to hard-fail, because falling through
+// to the legacy parse tried to unmarshal the string "x" into a hostEntry
+// struct. The key-set disambiguation reads this as modern, so it succeeds
+// with Current set and an empty host map.
+func TestCurrentWithNullHostsDoesNotFail(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("XDG_CONFIG_HOME", dir)
+	if err := os.MkdirAll(filepath.Join(dir, "taskr"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "taskr", "hosts.json"), []byte(`{"current":"x","hosts":null}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	got, err := loadHosts(io.Discard)
+	if err != nil {
+		t.Fatalf("loadHosts: %v", err)
+	}
+	if got.Current != "x" {
+		t.Errorf("Current = %q, want x", got.Current)
+	}
+	if len(got.Hosts) != 0 {
+		t.Errorf("Hosts = %v, want empty", got.Hosts)
+	}
+}
+
+// TestResolveTargetWarnsWhenSeveralHostsHaveNoCurrent pins fix-round-1
+// finding 2: a file with several hosts and no Current used to fall back to
+// the compiled default in total silence, which is TSK-60 verbatim against
+// a real config that predates this fix. The warning must name the stored
+// hosts and the remedy.
+func TestResolveTargetWarnsWhenSeveralHostsHaveNoCurrent(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("XDG_CONFIG_HOME", dir)
+	if err := os.MkdirAll(filepath.Join(dir, "taskr"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	body := `{"hosts":{"one.example":{"key":"k1"},"two.example":{"key":"k2"}}}`
+	if err := os.WriteFile(filepath.Join(dir, "taskr", "hosts.json"), []byte(body), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	var warned bytes.Buffer
+	target, err := resolveTarget(envFrom(nil), &warned)
+	if err != nil {
+		t.Fatalf("resolveTarget: %v", err)
+	}
+	if target.BaseURL != defaultAPI {
+		t.Errorf("BaseURL = %q, want the default %q", target.BaseURL, defaultAPI)
+	}
+	got := warned.String()
+	if got == "" {
+		t.Fatal("no warning for several stored hosts with none marked current")
+	}
+	for _, want := range []string{"one.example", "two.example", "taskr auth login", "TASKR_API"} {
+		if !strings.Contains(got, want) {
+			t.Errorf("warning = %q, want it to contain %q", got, want)
+		}
+	}
+}
+
+// TestResolveTargetDoesNotWarnWithASingleLoggedInHost pins the other half:
+// exactly one stored host is unambiguous, so it must stay silent — a
+// warning that fires in ordinary use is a warning nobody reads.
+func TestResolveTargetDoesNotWarnWithASingleLoggedInHost(t *testing.T) {
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	if err := saveKey("100.91.91.47:8110", "tk_only"); err != nil {
+		t.Fatalf("saveKey: %v", err)
+	}
+
+	var warned bytes.Buffer
+	if _, err := resolveTarget(envFrom(nil), &warned); err != nil {
+		t.Fatalf("resolveTarget: %v", err)
+	}
+	if warned.Len() != 0 {
+		t.Errorf("warned with a single unambiguous logged-in host: %q", warned.String())
+	}
+}
+
+// TestResolveTargetDoesNotWarnWhenCurrentIsSet pins the same silence for
+// several stored hosts once Current names one of them — the ambiguity the
+// warning exists for is already resolved.
+func TestResolveTargetDoesNotWarnWhenCurrentIsSet(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("XDG_CONFIG_HOME", dir)
+	if err := os.MkdirAll(filepath.Join(dir, "taskr"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	body := `{"current":"two.example","hosts":{"one.example":{"key":"k1"},"two.example":{"key":"k2"}}}`
+	if err := os.WriteFile(filepath.Join(dir, "taskr", "hosts.json"), []byte(body), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	var warned bytes.Buffer
+	if _, err := resolveTarget(envFrom(nil), &warned); err != nil {
+		t.Fatalf("resolveTarget: %v", err)
+	}
+	if warned.Len() != 0 {
+		t.Errorf("warned even though Current names a host: %q", warned.String())
+	}
+}
+
+// TestResolveTargetDoesNotWarnWithoutAConfigFile pins that never having
+// logged in at all is not ambiguity either.
+func TestResolveTargetDoesNotWarnWithoutAConfigFile(t *testing.T) {
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	var warned bytes.Buffer
+	if _, err := resolveTarget(envFrom(nil), &warned); err != nil {
+		t.Fatalf("resolveTarget: %v", err)
+	}
+	if warned.Len() != 0 {
+		t.Errorf("warned with no config file at all: %q", warned.String())
+	}
+}

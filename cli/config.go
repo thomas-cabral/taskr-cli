@@ -8,6 +8,7 @@ import (
 	"net"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 )
 
@@ -35,16 +36,36 @@ type hostsFile struct {
 }
 
 // UnmarshalJSON accepts both the current shape and the flat map that
-// predates Current, so an existing config keeps working untouched. A
-// legacy file is recognised by the absence of a "hosts" object; it is
-// rewritten into the current shape the next time anything saves.
+// predates Current, so an existing config keeps working untouched. The two
+// are told apart by the top-level key set, not by whether "hosts" decodes
+// to something non-nil: a file is modern only when "hosts" is present and
+// every top-level key is "current" or "hosts". Anything else — including a
+// legacy file that happens to have a host literally named "hosts" — is
+// legacy, so a colliding key never shadows a real host and silently drops
+// it. A legacy file is rewritten into the current shape the next time
+// anything saves.
 func (h *hostsFile) UnmarshalJSON(data []byte) error {
-	var modern struct {
-		Current string               `json:"current"`
-		Hosts   map[string]hostEntry `json:"hosts"`
+	var top map[string]json.RawMessage
+	if err := json.Unmarshal(data, &top); err != nil {
+		return err
 	}
-	if err := json.Unmarshal(data, &modern); err == nil && modern.Hosts != nil {
-		h.Current, h.Hosts = modern.Current, modern.Hosts
+	_, hasHosts := top["hosts"]
+	modern := hasHosts
+	for k := range top {
+		if k != "current" && k != "hosts" {
+			modern = false
+			break
+		}
+	}
+	if modern {
+		var m struct {
+			Current string               `json:"current"`
+			Hosts   map[string]hostEntry `json:"hosts"`
+		}
+		if err := json.Unmarshal(data, &m); err != nil {
+			return err
+		}
+		h.Current, h.Hosts = m.Current, m.Hosts
 		return nil
 	}
 	var legacy map[string]hostEntry
@@ -100,6 +121,28 @@ func loadHosts(warn io.Writer) (hostsFile, error) {
 		h.Hosts = map[string]hostEntry{}
 	}
 	return h, nil
+}
+
+// warnAmbiguousHosts reports that resolveTarget could not choose among
+// several stored hosts and fell back to the compiled default, because none
+// of them is marked current. This is TSK-60's remaining edge: saveKey
+// naming the just-logged-in host as current only helps someone who logs in
+// again, so a file that already has several hosts stays broken with no
+// clue why unless this warns about it. Warn and continue, matching
+// warnIfReadable's pattern — the file is still fully usable, it just needs
+// a current host named.
+func warnAmbiguousHosts(warn io.Writer, hosts map[string]hostEntry) {
+	if warn == nil {
+		return
+	}
+	names := make([]string, 0, len(hosts))
+	for host := range hosts {
+		names = append(names, host)
+	}
+	sort.Strings(names)
+	fmt.Fprintf(warn, "taskr: warning: %d hosts are stored (%s) and none is marked current, "+
+		"so falling back to %s. Run `taskr auth login` against the one you want, or set TASKR_API.\n",
+		len(names), strings.Join(names, ", "), defaultAPI)
 }
 
 // warnIfReadable reports a config file any account but the owner can read.
@@ -228,7 +271,9 @@ type resolvedTarget struct {
 // the CLI on an unrelated service that answers 404 rather than on a clean
 // connection error. Several hosts with no Current stay ambiguous and keep
 // the default, because picking one by map order would be arbitrary
-// (TSK-60).
+// (TSK-60) — but that fallback is now warned about, naming the stored
+// hosts and the remedy, since falling back in silence is exactly the bug
+// this file closes.
 func resolveTarget(getenv func(string) string, warn io.Writer) (resolvedTarget, error) {
 	envAPI, envKey := getenv("TASKR_API"), getenv("TASKR_KEY")
 
@@ -250,6 +295,8 @@ func resolveTarget(getenv func(string) string, warn io.Writer) (resolvedTarget, 
 			for stored := range hosts.Hosts {
 				base = normalizeBaseURL(stored)
 			}
+		case len(hosts.Hosts) > 1:
+			warnAmbiguousHosts(warn, hosts.Hosts)
 		}
 	}
 	host := hostKey(base)
