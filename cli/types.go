@@ -293,4 +293,9 @@ type authStatus struct {
 	Actor         string   `json:"actor,omitempty"`
 	Scopes        []string `json:"scopes,omitempty"`
 	KeyID         string   `json:"key_id,omitempty"`
+	Billing       *struct {
+		Status      string `json:"status"`
+		Writable    bool   `json:"writable"`
+		TrialEndsAt string `json:"trial_ends_at,omitempty"`
+	} `json:"billing,omitempty"`
 }

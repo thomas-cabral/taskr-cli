@@ -155,3 +155,18 @@ func TestAuthStatusSaysSoWhenTheInstanceWithholdsTheActor(t *testing.T) {
 		t.Fatalf("want the missing actor explained, got:\n%s", got)
 	}
 }
+
+// The `plan` line is how `taskr auth status` surfaces the org's billing
+// state without a separate command — the trial's end date is the one fact
+// worth a glance, so it is printed rather than left for `--json`.
+func TestAuthStatusPrintsThePlan(t *testing.T) {
+	srv := statusServer(t, `{"authenticated":true,"required":true,"actor":"user","billing":{"status":"trial","writable":true,"trial_ends_at":"2026-09-05T12:00:00Z","seats":1}}`)
+	var out, errb bytes.Buffer
+	env := envAt(map[string]string{"TASKR_API": srv.URL, "TASKR_KEY": "x"})
+	if code := Run([]string{"auth", "status"}, &out, &errb, env); code != 0 {
+		t.Fatalf("exit %d, stderr: %s", code, errb.String())
+	}
+	if !strings.Contains(out.String(), "plan      trial, ends 2026-09-05") {
+		t.Fatalf("want the plan line, got:\n%s", out.String())
+	}
+}

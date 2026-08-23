@@ -1008,6 +1008,28 @@ func authStatusCmd(args []string, stdout, stderr io.Writer, getenv func(string) 
 	if st.KeyID != "" {
 		fmt.Fprintf(stdout, "key       %s\n", st.KeyID)
 	}
+	// "exempt" is what a billing-off install and a comped org both report,
+	// and neither has a plan to speak of. Printing "plan exempt" there would
+	// make a self-hosted taskr look like it has a subscription it does not
+	// have, and would change what this command prints on an install where
+	// nothing about billing is switched on — so the line is skipped entirely
+	// and the output is exactly what it was before billing existed.
+	if b := st.Billing; b != nil && b.Status != "exempt" {
+		line := b.Status
+		switch {
+		// The date is sliced to its yyyy-mm-dd prefix, so the length is
+		// checked rather than assumed: TrialEndsAt comes off the wire, and a
+		// short or malformed value would panic this command rather than
+		// print a slightly wrong date.
+		case b.Status == "trial" && len(b.TrialEndsAt) >= 10:
+			line = "trial, ends " + b.TrialEndsAt[:10]
+		case b.Status == "trial_expired":
+			line = "trial expired — writes are paused; subscribe from the web app"
+		case b.Status == "lapsed":
+			line = "subscription lapsed — writes are paused; manage billing from the web app"
+		}
+		fmt.Fprintf(stdout, "plan      %s\n", line)
+	}
 	if st.Actor == "user" && st.KeyID != "" {
 		fmt.Fprintf(stdout,
 			"\nIf an agent is holding this key, every write it makes is recorded as the user.\n"+
