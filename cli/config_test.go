@@ -103,11 +103,11 @@ func TestHostsFileIsKeyedByHostAndDoesNotClobberOtherHosts(t *testing.T) {
 	if err != nil {
 		t.Fatalf("loadHosts: %v", err)
 	}
-	if hosts["127.0.0.1:8099"].Key != "tk_local" {
-		t.Errorf("local key = %q, want tk_local", hosts["127.0.0.1:8099"].Key)
+	if hosts.Hosts["127.0.0.1:8099"].Key != "tk_local" {
+		t.Errorf("local key = %q, want tk_local", hosts.Hosts["127.0.0.1:8099"].Key)
 	}
-	if hosts["taskr.example.com"].Key != "tk_hosted" {
-		t.Errorf("hosted key = %q, want tk_hosted", hosts["taskr.example.com"].Key)
+	if hosts.Hosts["taskr.example.com"].Key != "tk_hosted" {
+		t.Errorf("hosted key = %q, want tk_hosted", hosts.Hosts["taskr.example.com"].Key)
 	}
 
 	path := filepath.Join(dir, "taskr", "hosts.json")
@@ -155,8 +155,8 @@ func TestAuthLoginReadsKeyFromStdinNotArgv(t *testing.T) {
 		t.Fatalf("loadHosts: %v", err)
 	}
 	host := hostKey(srv.URL)
-	if hosts[host].Key != "tk_secret" {
-		t.Errorf("stored key for %s = %q, want tk_secret", host, hosts[host].Key)
+	if hosts.Hosts[host].Key != "tk_secret" {
+		t.Errorf("stored key for %s = %q, want tk_secret", host, hosts.Hosts[host].Key)
 	}
 }
 
@@ -181,7 +181,7 @@ func TestAuthLoginRejectsAKeyTheServerDoesNotAccept(t *testing.T) {
 	if err != nil {
 		t.Fatalf("loadHosts: %v", err)
 	}
-	if _, saved := hosts[hostKey(srv.URL)]; saved {
+	if _, saved := hosts.Hosts[hostKey(srv.URL)]; saved {
 		t.Error("a rejected key was saved to hosts.json")
 	}
 }
@@ -225,8 +225,8 @@ func TestLoadHostsWarnsAboutAReadableConfigFile(t *testing.T) {
 	if err != nil {
 		t.Fatalf("loadHosts on a 0644 file: %v", err)
 	}
-	if hosts["127.0.0.1:8099"].Key != "tk_local" {
-		t.Errorf("key = %q, want tk_local — the warning must not stop the read", hosts["127.0.0.1:8099"].Key)
+	if hosts.Hosts["127.0.0.1:8099"].Key != "tk_local" {
+		t.Errorf("key = %q, want tk_local — the warning must not stop the read", hosts.Hosts["127.0.0.1:8099"].Key)
 	}
 	got := warned.String()
 	if got == "" {
@@ -269,7 +269,7 @@ func TestLoadHostsIsSilentWithoutAConfigFile(t *testing.T) {
 	if err != nil {
 		t.Fatalf("loadHosts: %v", err)
 	}
-	if len(hosts) != 0 {
+	if len(hosts.Hosts) != 0 {
 		t.Errorf("hosts = %v, want empty", hosts)
 	}
 	if warned.Len() != 0 {
@@ -308,15 +308,19 @@ func TestResolveTargetAdoptsTheOnlyLoggedInHostWhenTASKR_APIUnset(t *testing.T) 
 // TestResolveTargetStaysOnTheDefaultWhenSeveralHostsAreLoggedIn pins the
 // boundary of that inference: one host is unambiguous, several are not.
 // Picking one of them by map order would be arbitrary, so the default
-// stands until an explicit current-host key exists to name the winner.
+// stands while Current is unset — which is now reachable only from a
+// hand-edited or pre-Current file, since saveKey itself always names the
+// host it just saved as Current (see the saveKey-driven tests below for
+// that path).
 func TestResolveTargetStaysOnTheDefaultWhenSeveralHostsAreLoggedIn(t *testing.T) {
-	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
-
-	if err := saveKey("100.91.91.47:8110", "tk_one"); err != nil {
-		t.Fatalf("saveKey one: %v", err)
+	dir := t.TempDir()
+	t.Setenv("XDG_CONFIG_HOME", dir)
+	if err := os.MkdirAll(filepath.Join(dir, "taskr"), 0o700); err != nil {
+		t.Fatal(err)
 	}
-	if err := saveKey("taskr.example.com", "tk_two"); err != nil {
-		t.Fatalf("saveKey two: %v", err)
+	body := `{"hosts":{"100.91.91.47:8110":{"key":"tk_one"},"taskr.example.com":{"key":"tk_two"}}}`
+	if err := os.WriteFile(filepath.Join(dir, "taskr", "hosts.json"), []byte(body), 0o600); err != nil {
+		t.Fatal(err)
 	}
 
 	target, err := resolveTarget(envFrom(nil), io.Discard)
@@ -344,5 +348,156 @@ func TestTASKR_APIWinsOverTheOnlyLoggedInHost(t *testing.T) {
 	}
 	if target.Host != "127.0.0.1:9999" {
 		t.Errorf("Host = %q, want the env override 127.0.0.1:9999", target.Host)
+	}
+}
+
+func TestLegacyFlatHostsFileStillParses(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("XDG_CONFIG_HOME", dir)
+	if err := os.MkdirAll(filepath.Join(dir, "taskr"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(dir, "taskr", "hosts.json")
+	if err := os.WriteFile(path, []byte(`{"one.example":{"key":"k1"}}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	got, err := loadHosts(io.Discard)
+	if err != nil {
+		t.Fatalf("loadHosts: %v", err)
+	}
+	if got.Current != "" {
+		t.Errorf("Current = %q, want empty for a legacy file", got.Current)
+	}
+	if got.Hosts["one.example"].Key != "k1" {
+		t.Errorf("Hosts[one.example].Key = %q, want k1", got.Hosts["one.example"].Key)
+	}
+}
+
+func TestSavingRewritesALegacyFileIntoTheCurrentShape(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("XDG_CONFIG_HOME", dir)
+	if err := os.MkdirAll(filepath.Join(dir, "taskr"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(dir, "taskr", "hosts.json")
+	if err := os.WriteFile(path, []byte(`{"one.example":{"key":"k1"}}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := saveKey("two.example", "k2"); err != nil {
+		t.Fatalf("saveKey: %v", err)
+	}
+
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var on struct {
+		Current string               `json:"current"`
+		Hosts   map[string]hostEntry `json:"hosts"`
+	}
+	if err := json.Unmarshal(data, &on); err != nil {
+		t.Fatalf("re-reading saved file: %v", err)
+	}
+	if on.Current != "two.example" {
+		t.Errorf("current = %q, want two.example", on.Current)
+	}
+	if on.Hosts["one.example"].Key != "k1" {
+		t.Error("saving clobbered the pre-existing host")
+	}
+	if on.Hosts["two.example"].Key != "k2" {
+		t.Error("saving did not store the new host")
+	}
+}
+
+// This is TSK-60. Two hosts stored used to abandon both and fall through
+// to the compiled default, which on a machine where something else holds
+// that port answers 404 rather than failing to connect.
+func TestTwoHostsResolveToTheCurrentOneNotTheDefault(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("XDG_CONFIG_HOME", dir)
+	if err := os.MkdirAll(filepath.Join(dir, "taskr"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	body := `{"current":"two.example","hosts":{"one.example":{"key":"k1"},"two.example":{"key":"k2"}}}`
+	if err := os.WriteFile(filepath.Join(dir, "taskr", "hosts.json"), []byte(body), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	got, err := resolveTarget(func(string) string { return "" }, io.Discard)
+	if err != nil {
+		t.Fatalf("resolveTarget: %v", err)
+	}
+	if got.BaseURL != "https://two.example" {
+		t.Errorf("BaseURL = %q, want https://two.example", got.BaseURL)
+	}
+	if got.Key != "k2" {
+		t.Errorf("Key = %q, want k2", got.Key)
+	}
+}
+
+func TestEnvStillBeatsTheStoredCurrentHost(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("XDG_CONFIG_HOME", dir)
+	if err := os.MkdirAll(filepath.Join(dir, "taskr"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	body := `{"current":"two.example","hosts":{"two.example":{"key":"k2"}}}`
+	if err := os.WriteFile(filepath.Join(dir, "taskr", "hosts.json"), []byte(body), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	env := map[string]string{"TASKR_API": "one.example"}
+	got, err := resolveTarget(func(k string) string { return env[k] }, io.Discard)
+	if err != nil {
+		t.Fatalf("resolveTarget: %v", err)
+	}
+	if got.BaseURL != "https://one.example" {
+		t.Errorf("BaseURL = %q, want https://one.example", got.BaseURL)
+	}
+}
+
+// A current host stored without a scheme must still be reached over
+// https. This is the property config.go's normalizeBaseURL comment
+// describes: the key goes out on the first request, so an http:// guess
+// leaks it before any redirect can intervene.
+func TestAStoredCurrentHostWithNoSchemeGetsHTTPS(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("XDG_CONFIG_HOME", dir)
+	if err := os.MkdirAll(filepath.Join(dir, "taskr"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	body := `{"current":"taskr.example.com","hosts":{"taskr.example.com":{"key":"k"}}}`
+	if err := os.WriteFile(filepath.Join(dir, "taskr", "hosts.json"), []byte(body), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	got, err := resolveTarget(func(string) string { return "" }, io.Discard)
+	if err != nil {
+		t.Fatalf("resolveTarget: %v", err)
+	}
+	if got.BaseURL != "https://taskr.example.com" {
+		t.Errorf("BaseURL = %q, want https — a plaintext scheme leaks the key", got.BaseURL)
+	}
+}
+
+func TestAStoredLocalCurrentHostStaysPlaintext(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("XDG_CONFIG_HOME", dir)
+	if err := os.MkdirAll(filepath.Join(dir, "taskr"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	body := `{"current":"127.0.0.1:8099","hosts":{"127.0.0.1:8099":{"key":"k"}}}`
+	if err := os.WriteFile(filepath.Join(dir, "taskr", "hosts.json"), []byte(body), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	got, err := resolveTarget(func(string) string { return "" }, io.Discard)
+	if err != nil {
+		t.Fatalf("resolveTarget: %v", err)
+	}
+	if got.BaseURL != "http://127.0.0.1:8099" {
+		t.Errorf("BaseURL = %q, want http for loopback", got.BaseURL)
 	}
 }

@@ -20,11 +20,40 @@ type hostEntry struct {
 	Key string `json:"key"`
 }
 
-// hostsFile is $XDG_CONFIG_HOME/taskr/hosts.json, keyed by host — the same
-// shape gh uses for hosts.yml, so a contributor can be authenticated to a
-// local instance and a hosted one at once without one login clobbering the
-// other.
-type hostsFile map[string]hostEntry
+// hostsFile is $XDG_CONFIG_HOME/taskr/hosts.json. Hosts is keyed by host,
+// the same shape gh uses for hosts.yml, so a contributor can be
+// authenticated to a local instance and a hosted one at once without one
+// login clobbering the other. Current names which of them an invocation
+// with no TASKR_API talks to.
+//
+// Current exists because its absence was a bug: with more than one host
+// stored, resolveTarget could not choose and fell through to the compiled
+// default, landing on whatever holds that port locally (TSK-60).
+type hostsFile struct {
+	Current string               `json:"current,omitempty"`
+	Hosts   map[string]hostEntry `json:"hosts"`
+}
+
+// UnmarshalJSON accepts both the current shape and the flat map that
+// predates Current, so an existing config keeps working untouched. A
+// legacy file is recognised by the absence of a "hosts" object; it is
+// rewritten into the current shape the next time anything saves.
+func (h *hostsFile) UnmarshalJSON(data []byte) error {
+	var modern struct {
+		Current string               `json:"current"`
+		Hosts   map[string]hostEntry `json:"hosts"`
+	}
+	if err := json.Unmarshal(data, &modern); err == nil && modern.Hosts != nil {
+		h.Current, h.Hosts = modern.Current, modern.Hosts
+		return nil
+	}
+	var legacy map[string]hostEntry
+	if err := json.Unmarshal(data, &legacy); err != nil {
+		return err
+	}
+	h.Current, h.Hosts = "", legacy
+	return nil
+}
 
 // configPath resolves $XDG_CONFIG_HOME/taskr/hosts.json, falling back to
 // ~/.config when XDG_CONFIG_HOME is unset.
@@ -53,22 +82,22 @@ func configPath() (string, error) {
 func loadHosts(warn io.Writer) (hostsFile, error) {
 	path, err := configPath()
 	if err != nil {
-		return nil, err
+		return hostsFile{}, err
 	}
 	data, err := os.ReadFile(path)
 	if os.IsNotExist(err) {
-		return hostsFile{}, nil
+		return hostsFile{Hosts: map[string]hostEntry{}}, nil
 	}
 	if err != nil {
-		return nil, err
+		return hostsFile{}, err
 	}
 	warnIfReadable(warn, path)
 	var h hostsFile
 	if err := json.Unmarshal(data, &h); err != nil {
-		return nil, fmt.Errorf("taskr: parsing %s: %w", path, err)
+		return hostsFile{}, fmt.Errorf("taskr: parsing %s: %w", path, err)
 	}
-	if h == nil {
-		h = hostsFile{}
+	if h.Hosts == nil {
+		h.Hosts = map[string]hostEntry{}
 	}
 	return h, nil
 }
@@ -189,14 +218,17 @@ type resolvedTarget struct {
 // it. Env wins over file in every case, matching gh's headless-use
 // precedent.
 //
-// With TASKR_API unset, a single logged-in host is taken as the host to
-// use. Logging in to exactly one instance and then being sent to the
-// compiled-in default anyway is never what the caller meant — and on a
+// With TASKR_API unset, the stored Current host wins when one is named —
+// saveKey sets it to whatever host was just logged in to. Without a
+// Current (a single logged-in host, or a file from before Current
+// existed), a lone logged-in host is still taken as the host to use:
+// logging in to exactly one instance and then being sent to the
+// compiled-in default anyway is never what the caller meant, and on a
 // machine where something else already holds the default port, that lands
 // the CLI on an unrelated service that answers 404 rather than on a clean
-// connection error. Several logged-in hosts stay ambiguous and keep the
-// default, because picking one by map order would be arbitrary; naming a
-// winner needs an explicit current-host key this file does not have yet.
+// connection error. Several hosts with no Current stay ambiguous and keep
+// the default, because picking one by map order would be arbitrary
+// (TSK-60).
 func resolveTarget(getenv func(string) string, warn io.Writer) (resolvedTarget, error) {
 	envAPI, envKey := getenv("TASKR_API"), getenv("TASKR_KEY")
 
@@ -210,16 +242,21 @@ func resolveTarget(getenv func(string) string, warn io.Writer) (resolvedTarget, 
 	}
 
 	base := normalizeBaseURL(envAPI)
-	if envAPI == "" && len(hosts) == 1 {
-		for stored := range hosts {
-			base = normalizeBaseURL(stored)
+	if envAPI == "" {
+		switch {
+		case hosts.Current != "":
+			base = normalizeBaseURL(hosts.Current)
+		case len(hosts.Hosts) == 1:
+			for stored := range hosts.Hosts {
+				base = normalizeBaseURL(stored)
+			}
 		}
 	}
 	host := hostKey(base)
 
 	key := envKey
 	if key == "" {
-		key = hosts[host].Key
+		key = hosts.Hosts[host].Key
 	}
 	return resolvedTarget{BaseURL: base, Host: host, Key: key}, nil
 }
@@ -233,6 +270,7 @@ func saveKey(host, key string) error {
 	if err != nil {
 		return err
 	}
-	hosts[host] = hostEntry{Key: key}
+	hosts.Hosts[host] = hostEntry{Key: key}
+	hosts.Current = host
 	return saveHosts(hosts)
 }
