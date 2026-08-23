@@ -54,7 +54,7 @@ var readBuildStamp = func() buildStamp {
 // rebuildHint is the fast path back to a current binary. `make build` works
 // too, but it runs `make web` first — a pnpm install and a SvelteKit build —
 // which is a long way round when only the CLI changed.
-const rebuildHint = "go build -o bin/taskr ./cmd/taskr-cli"
+const rebuildHint = "go build -o bin/taskr ./cmd/taskr"
 
 // stalenessWarning says, in one line, whether the taskr that is running is
 // the taskr in the checkout the caller is standing in.
