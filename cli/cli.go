@@ -10,6 +10,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 )
 
@@ -30,6 +31,11 @@ Usage:
   taskr offload <title> -m <brief> [-k kind] [-s severity]
   taskr comment <ref> -m <text>
   taskr triage <ref> <verdict> [-e evidence] [-d duplicate-of]
+  taskr check add <ref> -m <procedure> [--expect <text>] [--human]
+                                          record a done-when on an issue
+  taskr check ls <ref>                   list an issue's checks
+  taskr check run <id> --pass|--fail [--measure metric=value[unit]]
+                                          record a result
   taskr timeline <ref>                   the event ledger
   taskr doc <ref>                        documents linked to an issue
   taskr doc add <ref> -f <path> [-t spec|plan|note] [--title T]
@@ -139,6 +145,8 @@ func Run(args []string, stdout, stderr io.Writer, getenv func(string) string) in
 		run = func() error { return runDoc(ctx, client, rest, os.Stdin, stdout, stderr) }
 	case "group":
 		run = func() error { return runGroup(ctx, client, rest, stdout, stderr) }
+	case "check":
+		run = func() error { return runCheck(ctx, client, rest, stdout, stderr, getenv) }
 	case "project":
 		run = func() error { return runProject(ctx, client, rest, stdout, stderr, getenv) }
 	default:
@@ -717,6 +725,152 @@ func cmdTriage(ctx context.Context, c *Client, args []string, stdout, stderr io.
 		return printJSON(stdout, okResult{OK: true})
 	}
 	fmt.Fprintf(stdout, "Recorded verdict %q for %s.\n", verdict, ref)
+	return nil
+}
+
+// parseMeasure parses one --measure argument: metric=value with an
+// optional trailing unit glued to the number ("list.p50=0.057s",
+// "list.rps=462r/s"). The unit is whatever follows the longest prefix
+// that parses as a float.
+func parseMeasure(s, conditions string) (Measurement, error) {
+	eq := strings.IndexByte(s, '=')
+	if eq <= 0 {
+		return Measurement{}, fmt.Errorf("--measure wants metric=value[unit], got %q", s)
+	}
+	metric, rest := s[:eq], s[eq+1:]
+	if rest == "" {
+		return Measurement{}, fmt.Errorf("--measure %s has no value", metric)
+	}
+	// Longest numeric prefix: try the whole string, then shrink.
+	for end := len(rest); end > 0; end-- {
+		v, err := strconv.ParseFloat(rest[:end], 64)
+		if err == nil {
+			return Measurement{Metric: metric, Value: v, Unit: rest[end:], Conditions: conditions}, nil
+		}
+	}
+	return Measurement{}, fmt.Errorf("--measure %s: %q is not a number", metric, rest)
+}
+
+// runCheck dispatches `taskr check add|ls|run`.
+func runCheck(ctx context.Context, c *Client, args []string, stdout, stderr io.Writer, getenv func(string) string) error {
+	if len(args) == 0 {
+		return fmt.Errorf("usage: taskr check add|ls|run …")
+	}
+	sub, rest := args[0], args[1:]
+	switch sub {
+	case "add":
+		return cmdCheckAdd(ctx, c, rest, stdout, stderr)
+	case "ls":
+		return cmdCheckLs(ctx, c, rest, stdout, stderr)
+	case "run":
+		return cmdCheckRun(ctx, c, rest, stdout, stderr)
+	default:
+		return fmt.Errorf("usage: taskr check add|ls|run …")
+	}
+}
+
+func cmdCheckAdd(ctx context.Context, c *Client, args []string, stdout, stderr io.Writer) error {
+	fs := flag.NewFlagSet("check add", flag.ContinueOnError)
+	fs.SetOutput(stderr)
+	title := fs.String("t", "", "short name for the check (defaults to the procedure)")
+	procedure := fs.String("m", "", "how to run it — the command or steps, verbatim")
+	expect := fs.String("expect", "", "what passing looks like")
+	human := fs.Bool("human", false, "only a person can run this check")
+	jsonOut := fs.Bool("json", false, "output JSON")
+	positional, err := parseFlags(fs, args)
+	if err != nil {
+		return err
+	}
+	if len(positional) < 1 || *procedure == "" && *title == "" {
+		return fmt.Errorf("usage: taskr check add <ref> -m <procedure> [--expect <text>] [--human] [-t <title>]")
+	}
+	name := *title
+	if name == "" {
+		name = *procedure
+	}
+	runner := "agent"
+	if *human {
+		runner = "human"
+	}
+	ref, err := c.DefineCheck(ctx, positional[0], DefineCheckInput{
+		Title: name, Procedure: *procedure, Expect: *expect, Runner: runner,
+	})
+	if err != nil {
+		return err
+	}
+	if *jsonOut {
+		return printJSON(stdout, ref)
+	}
+	fmt.Fprintf(stdout, "Check %s on %s (%s). Record a result with `taskr check run %s --pass|--fail`.\n",
+		ref.ID, ref.Issue.Ref, runner, ref.ID)
+	return nil
+}
+
+func cmdCheckLs(ctx context.Context, c *Client, args []string, stdout, stderr io.Writer) error {
+	fs := flag.NewFlagSet("check ls", flag.ContinueOnError)
+	fs.SetOutput(stderr)
+	jsonOut := fs.Bool("json", false, "output JSON")
+	positional, err := parseFlags(fs, args)
+	if err != nil {
+		return err
+	}
+	if len(positional) < 1 {
+		return fmt.Errorf("usage: taskr check ls <ref>")
+	}
+	checks, err := c.ListChecks(ctx, positional[0])
+	if err != nil {
+		return err
+	}
+	if *jsonOut {
+		return printJSON(stdout, checks)
+	}
+	RenderChecks(stdout, checks)
+	return nil
+}
+
+func cmdCheckRun(ctx context.Context, c *Client, args []string, stdout, stderr io.Writer) error {
+	fs := flag.NewFlagSet("check run", flag.ContinueOnError)
+	fs.SetOutput(stderr)
+	pass := fs.Bool("pass", false, "the check passed")
+	failFlag := fs.Bool("fail", false, "the check failed")
+	var measures stringList
+	fs.Var(&measures, "measure", "metric=value[unit], repeatable")
+	conditions := fs.String("conditions", "", "conditions the measurements were taken under")
+	evidence := fs.String("e", "", "evidence document id")
+	sha := fs.String("sha", "", "head SHA the run verified")
+	image := fs.String("image", "", "image digest the run verified")
+	note := fs.String("note", "", "free-text note")
+	jsonOut := fs.Bool("json", false, "output JSON")
+	positional, err := parseFlags(fs, args)
+	if err != nil {
+		return err
+	}
+	if len(positional) < 1 || *pass == *failFlag {
+		return fmt.Errorf("usage: taskr check run <check-id> --pass|--fail [--measure metric=value[unit]]… [--conditions <text>] [-e <doc-id>] [--sha <head>] [--image <digest>] [--note <text>]")
+	}
+	outcome := "pass"
+	if *failFlag {
+		outcome = "fail"
+	}
+	var ms []Measurement
+	for _, raw := range measures {
+		m, err := parseMeasure(raw, *conditions)
+		if err != nil {
+			return err
+		}
+		ms = append(ms, m)
+	}
+	run, err := c.RunCheck(ctx, positional[0], RunCheckInput{
+		Outcome: outcome, Measurements: ms, EvidenceDocID: *evidence,
+		HeadSHA: *sha, Image: *image, Note: *note,
+	})
+	if err != nil {
+		return err
+	}
+	if *jsonOut {
+		return printJSON(stdout, run)
+	}
+	fmt.Fprintf(stdout, "Recorded %s (run %s).\n", outcome, run.ID)
 	return nil
 }
 
