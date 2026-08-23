@@ -11,6 +11,12 @@ builds only the `taskr` binary; it does not include the server.
 
 ## Install
 
+With a Go toolchain:
+
+```bash
+go install github.com/thomas-cabral/taskr-cli/cmd/taskr@latest
+```
+
 macOS and Linux:
 
 ```bash
@@ -18,11 +24,8 @@ curl -fsSL https://aitaskr.com/install.sh | sh
 ```
 
 This puts the binary in `~/.local/bin`; set `TASKR_INSTALL_DIR` to install
-somewhere else. With a Go toolchain instead:
-
-```bash
-go install github.com/thomas-cabral/taskr-cli/cmd/taskr@latest
-```
+somewhere else. Not yet live — it starts working with the next site
+deploy; until then, use `go install` above or the releases page below.
 
 Windows: grab `taskr_<version>_windows_amd64.zip` from the
 [releases page](https://github.com/thomas-cabral/taskr-cli/releases).
