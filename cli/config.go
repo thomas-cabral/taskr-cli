@@ -12,9 +12,12 @@ import (
 	"strings"
 )
 
-// defaultAPI is the base URL used when TASKR_API is unset and no single
-// host is logged in — a local taskr-api on its default port.
-const defaultAPI = "http://127.0.0.1:8099"
+// defaultAPI is the base URL used when TASKR_API is unset, no host is
+// marked current, and no single host is logged in — the hosted instance,
+// so a freshly installed taskr works before it is configured. A local
+// taskr-api is reached with TASKR_API=127.0.0.1:8099, which
+// normalizeBaseURL keeps on http because the host is loopback.
+const defaultAPI = "https://api.aitaskr.com"
 
 // hostEntry is one host's stored credential.
 type hostEntry struct {

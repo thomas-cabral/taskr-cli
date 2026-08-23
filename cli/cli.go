@@ -45,7 +45,7 @@ Usage:
 Every command accepts --json for machine-readable output.
 new and offload accept --project <slug> to name a project outright.
 next and ls accept --all to widen past the caller's resolved project.
-Env: TASKR_API (default http://127.0.0.1:8099), TASKR_KEY.
+Env: TASKR_API (default https://api.aitaskr.com), TASKR_KEY.
      TASKR_SESSION names this invocation context, so two terminals (or a
      terminal and an agent) on one machine do not share a work session.
      Defaults to the parent process id.

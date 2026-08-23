@@ -57,7 +57,8 @@ instance and a hosted one at once.
 
 Environment variables:
 
-- `TASKR_API` — selects the host (default `http://127.0.0.1:8099`)
+- `TASKR_API` — selects the host (default `https://api.aitaskr.com`; point
+  it at a self-hosted instance, or at `127.0.0.1:8099` for a local one)
 - `TASKR_KEY` — overrides whatever is stored for the selected host
 - `TASKR_SESSION` — names this invocation context, so two terminals (or a
   terminal and an agent) on one machine do not share a work session;

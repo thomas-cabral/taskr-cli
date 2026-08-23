@@ -692,3 +692,18 @@ func TestResolveTargetDoesNotWarnWithoutAConfigFile(t *testing.T) {
 		t.Errorf("warned with no config file at all: %q", warned.String())
 	}
 }
+
+func TestNoConfigAndNoEnvReachesTheHostedInstance(t *testing.T) {
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+
+	got, err := resolveTarget(func(string) string { return "" }, io.Discard)
+	if err != nil {
+		t.Fatalf("resolveTarget: %v", err)
+	}
+	if got.BaseURL != "https://api.aitaskr.com" {
+		t.Errorf("BaseURL = %q, want the hosted default", got.BaseURL)
+	}
+	if got.Key != "" {
+		t.Errorf("Key = %q, want empty with no stored credential", got.Key)
+	}
+}
