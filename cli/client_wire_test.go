@@ -3,6 +3,8 @@ package cli_test
 
 import (
 	"context"
+	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -150,5 +152,115 @@ func TestUpdateIssueDecodesGroupHint(t *testing.T) {
 	want := cli.GroupChild{ID: "id-2", Ref: "TSK-2", Title: "next up", Status: "open", Position: 2}
 	if *out.GroupHint.NextChild != want {
 		t.Errorf("NextChild = %+v, want %+v", *out.GroupHint.NextChild, want)
+	}
+}
+
+func TestDefineCheckPostsAndDecodes(t *testing.T) {
+	var gotPath, gotBody string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotPath = r.Method + " " + r.URL.Path
+		b, _ := io.ReadAll(r.Body)
+		gotBody = string(b)
+		w.WriteHeader(http.StatusCreated)
+		w.Write([]byte(`{"id":"c-1","issue":{"id":"i-1","ref":"TSK-9"}}`))
+	}))
+	defer srv.Close()
+	c := &cli.Client{BaseURL: srv.URL}
+	ref, err := c.DefineCheck(context.Background(), "TSK-9", cli.DefineCheckInput{
+		Title: "lists fast", Procedure: "hey -z 30s", Expect: "> 100 r/s", Runner: "human",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if gotPath != "POST /api/issues/TSK-9/checks" {
+		t.Fatalf("path = %q", gotPath)
+	}
+	if !strings.Contains(gotBody, `"runner":"human"`) || !strings.Contains(gotBody, `"procedure":"hey -z 30s"`) {
+		t.Fatalf("body = %s", gotBody)
+	}
+	if ref.ID != "c-1" || ref.Issue.Ref != "TSK-9" {
+		t.Fatalf("ref = %+v", ref)
+	}
+}
+
+func TestRunCheckPostsMeasurements(t *testing.T) {
+	var gotPath, gotBody string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotPath = r.Method + " " + r.URL.Path
+		b, _ := io.ReadAll(r.Body)
+		gotBody = string(b)
+		w.WriteHeader(http.StatusCreated)
+		w.Write([]byte(`{"id":"42","outcome":"pass","recorded_at":"2026-08-23T00:00:00.000000000Z"}`))
+	}))
+	defer srv.Close()
+	c := &cli.Client{BaseURL: srv.URL}
+	run, err := c.RunCheck(context.Background(), "c-1", cli.RunCheckInput{
+		Outcome:      "pass",
+		Measurements: []cli.Measurement{{Metric: "list.rps", Value: 462, Unit: "r/s", Conditions: "c50"}},
+		HeadSHA:      "abc123",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if gotPath != "POST /api/checks/c-1/runs" {
+		t.Fatalf("path = %q", gotPath)
+	}
+	if !strings.Contains(gotBody, `"metric":"list.rps"`) || !strings.Contains(gotBody, `"value":462`) {
+		t.Fatalf("body = %s", gotBody)
+	}
+	if run.ID != "42" || run.Outcome != "pass" {
+		t.Fatalf("run = %+v", run)
+	}
+}
+
+func TestListChecksAndPendingChecksGet(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/api/issues/TSK-9/checks":
+			w.Write([]byte(`[{"id":"c-1","title":"t","runner":"agent","status":"pending","created_at":"x"}]`))
+		case "/api/checks/pending":
+			if r.URL.Query().Get("runner") != "human" || r.URL.Query().Get("all") != "1" {
+				w.WriteHeader(http.StatusBadRequest)
+				return
+			}
+			w.Write([]byte(`[{"issue_id":"i","issue_ref":"TSK-9","issue_title":"T","check_id":"c-1","title":"t","runner":"human"}]`))
+		default:
+			w.WriteHeader(http.StatusNotFound)
+		}
+	}))
+	defer srv.Close()
+	c := &cli.Client{BaseURL: srv.URL}
+	checks, err := c.ListChecks(context.Background(), "TSK-9")
+	if err != nil || len(checks) != 1 || checks[0].Status != "pending" {
+		t.Fatalf("checks = %+v, %v", checks, err)
+	}
+	pending, err := c.PendingChecks(context.Background(), "human", cli.Locator{}, true)
+	if err != nil || len(pending) != 1 || pending[0].IssueRef != "TSK-9" {
+		t.Fatalf("pending = %+v, %v", pending, err)
+	}
+}
+
+func TestAPIErrorCarriesTheRawBody(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusConflict)
+		w.Write([]byte(`{"error":"pending","pending_checks":[{"id":"c-1","title":"t","runner":"human"}]}`))
+	}))
+	defer srv.Close()
+	c := &cli.Client{BaseURL: srv.URL}
+	_, err := c.UpdateIssue(context.Background(), "TSK-9", cli.UpdateIssueInput{Status: "closed"})
+	var apiErr *cli.APIError
+	if !errors.As(err, &apiErr) {
+		t.Fatalf("err = %v, want *APIError", err)
+	}
+	if apiErr.Status != http.StatusConflict {
+		t.Fatalf("status = %d", apiErr.Status)
+	}
+	var body cli.PendingChecksBody
+	if jsonErr := json.Unmarshal(apiErr.Body, &body); jsonErr != nil {
+		t.Fatalf("Body not preserved: %v (%s)", jsonErr, apiErr.Body)
+	}
+	if len(body.PendingChecks) != 1 || body.PendingChecks[0].Runner != "human" {
+		t.Fatalf("decoded = %+v", body)
 	}
 }
