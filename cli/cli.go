@@ -26,6 +26,12 @@ Usage:
   taskr new <title> [-k kind] [-p priority] [-m description] [--parent GROUP]
   taskr group add <group> <child>        add an existing issue to a group
   taskr group rm <group> <child>         take an issue out of a group
+  taskr relate <ref> <type> <target-ref>
+                                          write a relationship: BLOCKS, BLOCKED_BY, RELATES_TO,
+                                          DUPLICATE_OF, DISCOVERED_DURING, DISCOVERED (case-insensitive)
+  taskr unrelate <ref> <type> <target-ref>
+                                          remove a relationship written by relate
+                                          PARENT_OF/CHILD_OF: use taskr group add/rm instead
   taskr start <ref>                      start or resume work; prints the resume packet
   taskr park -m <note> [-r reason]       stop work, naming the next action
   taskr end [-r reason]                  close out the current session
@@ -186,6 +192,10 @@ func Run(args []string, stdout, stderr io.Writer, getenv func(string) string) in
 		run = func() error { return runDoc(ctx, client, rest, os.Stdin, stdout, stderr) }
 	case "group":
 		run = func() error { return runGroup(ctx, client, rest, stdout, stderr) }
+	case "relate":
+		run = func() error { return cmdRelate(ctx, client, rest, stdout, stderr, session) }
+	case "unrelate":
+		run = func() error { return cmdUnrelate(ctx, client, rest, stdout, stderr, session) }
 	case "check":
 		run = func() error { return runCheck(ctx, client, rest, stdout, stderr, getenv) }
 	case "step":
@@ -841,6 +851,83 @@ func cmdTriage(ctx context.Context, c *Client, args []string, stdout, stderr io.
 	}
 	fmt.Fprintf(stdout, "Recorded verdict %q for %s.\n", verdict, ref)
 	return nil
+}
+
+// relTypes are the relationship types POST /api/issues/{ref}/relate
+// accepts, mirrored from internal/domain/enums.go so an unknown or
+// misspelled type is caught here rather than costing a round trip to learn
+// as a 400.
+var relTypes = []string{
+	"BLOCKS", "BLOCKED_BY", "RELATES_TO", "DUPLICATE_OF", "DISCOVERED_DURING", "DISCOVERED",
+}
+
+// validateRelType upper-cases a relationship type — so an agent typing
+// `blocks` does not get rejected — and refuses locally what the round trip
+// would refuse anyway, before making it. PARENT_OF and CHILD_OF are real
+// values on the wire, but the aggregate refuses them with
+// domain.ErrUseGroupVerbs: group membership is `taskr group add`/`rm`'s
+// job, not relate's, so both are named here rather than left to surface as
+// an opaque 400. A refusal that costs a network call to learn is worse
+// than one that does not.
+func validateRelType(raw string) (string, error) {
+	t := strings.ToUpper(strings.TrimSpace(raw))
+	switch t {
+	case "PARENT_OF", "CHILD_OF":
+		return "", fmt.Errorf("%s is managed by `taskr group add`/`taskr group rm`, not relate", t)
+	}
+	for _, want := range relTypes {
+		if t == want {
+			return t, nil
+		}
+	}
+	return "", fmt.Errorf("unknown relationship type %q — want one of %s", raw, strings.Join(relTypes, ", "))
+}
+
+// runRelate backs both taskr relate and taskr unrelate: both write POST
+// /api/issues/{ref}/relate, differing only in the remove flag the body
+// carries — unrelate deletes the same edge rather than hitting a second
+// endpoint.
+func runRelate(ctx context.Context, c *Client, args []string, stdout, stderr io.Writer, session string, remove bool, verb string) error {
+	fs := flag.NewFlagSet(verb, flag.ContinueOnError)
+	fs.SetOutput(stderr)
+	jsonOut := fs.Bool("json", false, "output JSON")
+	positional, err := parseFlags(fs, args)
+	if err != nil {
+		return err
+	}
+	if len(positional) < 3 {
+		return fmt.Errorf("usage: taskr %s <ref> <type> <target-ref>", verb)
+	}
+	ref, target := positional[0], positional[2]
+	relType, err := validateRelType(positional[1])
+	if err != nil {
+		return err
+	}
+	if err := c.RelateIssues(ctx, ref, RelateInput{
+		To: target, Type: relType, Remove: remove, SessionID: session,
+	}); err != nil {
+		return err
+	}
+	if *jsonOut {
+		return printJSON(stdout, okResult{OK: true})
+	}
+	if remove {
+		fmt.Fprintf(stdout, "Removed %s %s %s.\n", ref, relType, target)
+	} else {
+		fmt.Fprintf(stdout, "%s %s %s.\n", ref, relType, target)
+	}
+	return nil
+}
+
+// cmdRelate writes a relationship: `taskr relate <ref> <type> <target-ref>`
+// prints the edge in the direction it reads, e.g. "TSK-102 BLOCKS TSK-103".
+func cmdRelate(ctx context.Context, c *Client, args []string, stdout, stderr io.Writer, session string) error {
+	return runRelate(ctx, c, args, stdout, stderr, session, false, "relate")
+}
+
+// cmdUnrelate removes a relationship written by relate.
+func cmdUnrelate(ctx context.Context, c *Client, args []string, stdout, stderr io.Writer, session string) error {
+	return runRelate(ctx, c, args, stdout, stderr, session, true, "unrelate")
 }
 
 // parseMeasure parses one --measure argument: metric=value with an
