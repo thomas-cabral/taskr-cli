@@ -99,7 +99,6 @@ type UpdateIssueResult struct {
 	AbandonedSteps []StepBrief `json:"abandoned_steps,omitempty"`
 }
 
-
 // IssueView is the read model for one issue.
 type IssueView struct {
 	ID           string              `json:"id"`
