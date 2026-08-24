@@ -654,6 +654,17 @@ func cmdClose(ctx context.Context, c *Client, args []string, stdout, stderr io.W
 	}
 
 	fmt.Fprintf(stdout, "Closed %s.\n", ref)
+	// Steps never gate a close, so this line is the only moment anyone is
+	// told what the plan did not reach. Saying it here is what turns "the
+	// close dropped three steps" into a decision — name them in the
+	// resolution, or offload them — instead of a silent loss (TSK-113).
+	if n := len(out.AbandonedSteps); n > 0 {
+		fmt.Fprintf(stdout, "%d step(s) left unfinished by the close:\n", n)
+		for _, s := range out.AbandonedSteps {
+			fmt.Fprintf(stdout, "  %d. %s\n", s.Position, s.Title)
+		}
+		fmt.Fprintln(stdout, "Name them in the resolution, or file them with `taskr offload`.")
+	}
 	if out.GroupHint != nil {
 		h := out.GroupHint
 		if h.AllChildrenClosed {
