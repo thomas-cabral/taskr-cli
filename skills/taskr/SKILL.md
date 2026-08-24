@@ -170,6 +170,8 @@ Every command below also accepts `--json`.
 | `taskr step edit <ref> <pos\|id> [--title T] [--body T]` | reword a step |
 | `taskr step drop <ref> <pos\|id> -m <reason>` | drop a step, on the record |
 | `taskr step promote <ref> <pos\|id> [--child\|--check] [--no-block]` | a step that turned out to be its own issue |
+| `taskr relate <ref> <type> <target>` | record a dependency: BLOCKS, BLOCKED_BY, RELATES_TO, DUPLICATE_OF, DISCOVERED_DURING, DISCOVERED |
+| `taskr unrelate <ref> <type> <target>` | remove one |
 | `taskr doc <ref>` | list documents linked to an issue |
 | `taskr doc add <ref> -f <path> [-t type] [--title T]` | attach a spec, plan or note |
 | `taskr doc show <id>` | print one document's body |
@@ -197,6 +199,34 @@ of the work, `step start`/`step done` as you move, `step drop -m` when a
 step turns out to be wrong (say why: the next reader needs to know it was
 considered, not forgotten). When a step is really its own issue, `step
 promote` makes it one rather than leaving a plan item nobody can rank.
+
+**A step is what you can finish before you stop.** That is the whole rule,
+and it is what keeps a plan from turning into a second issue tracker inside
+an issue. Work that spans pull requests, spans repositories, or can only be
+verified after something lands is not a step: it is a child issue, or it is
+a check. `taskr step promote <ref> <pos> --child` makes it the first and
+wires a `BLOCKS` edge so this issue leaves the ready queue until it lands;
+`--check` makes it the second, and the close gate holds instead. Reaching
+for promote is the plan working, not the plan failing — a step that quietly
+grew into a week of work is how a plan stops being true.
+
+**Starting and finishing a step records the commit you were at.** That is
+the point of moving them rather than only writing them: `taskr context`
+tells the next agent "step 3 of 6, in progress since `abc123`", so picking
+the work up lands somewhere real instead of somewhere described. Add `-m`
+when the commit alone does not say what happened — `step done <ref> 3 -m
+"fallback lands in auth.go:112"` costs nothing and saves a hunt.
+
+**Closing an issue abandons whatever the plan did not reach, and tells
+you.** Steps never block a close — a plan is not a promise — but `taskr
+close` hands back every unfinished step rather than swallowing it. Do
+something with that list: name it in the resolution if it turned out not to
+matter, or `taskr offload` it if it did. A step abandoned in silence is
+exactly the thread this tool exists to stop losing.
+
+Record the sequencing while the work is live. `taskr relate <ref> BLOCKS
+<other>` refuses a closed issue, so an ordering you leave until afterwards
+cannot be written down at all.
 
 ## Where taskr thinks you are
 
