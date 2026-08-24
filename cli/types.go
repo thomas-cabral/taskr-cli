@@ -112,6 +112,14 @@ type IssueView struct {
 	Group        *GroupBlock         `json:"group,omitempty"`
 	Parent       *ParentBlock        `json:"parent,omitempty"`
 	Checks       []CheckView         `json:"checks,omitempty"`
+	// Steps is the issue's working plan in order, and StepProgress the
+	// one-line summary of it — both computed server-side (internal/app/
+	// step.go's StepProgress), so `step ls` reads the count from here
+	// rather than re-deriving it: the counting rule (which statuses count
+	// on which side of the fraction) should exist once, not mirrored in
+	// this client and left to drift if the server's ever changes.
+	Steps        []StepView    `json:"steps,omitempty"`
+	StepProgress *StepProgress `json:"step_progress,omitempty"`
 }
 
 // SearchResult is the compact row `ls` renders. It never carries the
@@ -381,4 +389,142 @@ type PendingCheckItem struct {
 	ID     string `json:"id"`
 	Title  string `json:"title"`
 	Runner string `json:"runner"`
+}
+
+// --- Steps (TSK-105) ---
+
+// StepRef names a created step and the issue it belongs to.
+type StepRef struct {
+	ID    string   `json:"id"`
+	Issue IssueRef `json:"issue"`
+}
+
+// MarkView is one recorded transition on a step — a start or a done, with
+// whatever the caller reported about the tree at that moment.
+type MarkView struct {
+	Kind       string `json:"kind"`
+	Note       string `json:"note,omitempty"`
+	Branch     string `json:"branch,omitempty"`
+	HeadSHA    string `json:"head_sha,omitempty"`
+	DirtyCount int    `json:"dirty_count,omitempty"`
+	SessionID  string `json:"session_id,omitempty"`
+	Actor      string `json:"actor"`
+	RecordedAt string `json:"recorded_at"`
+}
+
+// StepView is one step in an issue's ordered working plan.
+type StepView struct {
+	ID           string     `json:"id"`
+	Position     int        `json:"position"`
+	Title        string     `json:"title"`
+	Body         string     `json:"body,omitempty"`
+	Status       string     `json:"status"`
+	PromotedKind string     `json:"promoted_kind,omitempty"`
+	PromotedTo   string     `json:"promoted_to,omitempty"`
+	PromotedRef  string     `json:"promoted_ref,omitempty"`
+	DropReason   string     `json:"drop_reason,omitempty"`
+	HeldBy       string     `json:"held_by,omitempty"`
+	StartedAt    string     `json:"started_at,omitempty"`
+	EndedAt      string     `json:"ended_at,omitempty"`
+	Marks        []MarkView `json:"marks,omitempty"`
+}
+
+// StepBrief is a step small enough to embed in a summary — StepProgress's
+// Current and Next.
+type StepBrief struct {
+	ID       string `json:"id"`
+	Position int    `json:"position"`
+	Title    string `json:"title"`
+	Status   string `json:"status"`
+}
+
+// StepProgress is the one-line summary of an issue's plan, computed
+// server-side and read off IssueView rather than recomputed here: Total
+// counts steps still part of the plan (done, pending, in progress) —
+// dropped, promoted and abandoned ones leave BOTH sides of the fraction,
+// so a plan that shed steps reads e.g. 2/2 rather than 2/4. Mirrors
+// internal/app/step.go's StepProgress.
+type StepProgress struct {
+	Done    int        `json:"done"`
+	Total   int        `json:"total"`
+	Current *StepBrief `json:"current,omitempty"`
+	Next    *StepBrief `json:"next,omitempty"`
+}
+
+// AddStepsInput is POST /api/issues/{ref}/steps' body. Body is only
+// meaningful when Titles has a single entry — the server ignores it
+// otherwise, the same rule AddSteps documents server-side.
+type AddStepsInput struct {
+	Titles    []string `json:"titles"`
+	Body      string   `json:"body,omitempty"`
+	After     string   `json:"after,omitempty"`
+	SessionID string   `json:"session_id,omitempty"`
+}
+
+// EditStepInput is PATCH /api/steps/{id}'s body. Title and Body are
+// *string so an unset field leaves the step untouched server-side; an
+// explicitly empty title is refused with 400 rather than accepted as a
+// clear.
+type EditStepInput struct {
+	Title     *string `json:"title,omitempty"`
+	Body      *string `json:"body,omitempty"`
+	SessionID string  `json:"session_id,omitempty"`
+}
+
+// MoveStepInput is PUT /api/steps/{id}/position's body. After is a step
+// id, never a position — the CLI resolves a position selector before
+// building this. No omitempty on After: an empty string is how "move to
+// the front" is spelled on the wire, and it must be sent, not dropped.
+type MoveStepInput struct {
+	After     string `json:"after"`
+	SessionID string `json:"session_id,omitempty"`
+}
+
+// StepSnapshot is the git snapshot a start or done mark carries. taskr
+// never runs git, and neither does this client: it only ever reads
+// TASKR_HEAD, so HeadSHA is the one field it ever sets. There is no
+// TASKR_BRANCH or TASKR_DIRTY — branch and dirty-count stay empty from
+// this client, left for whatever else records a mark to fill in.
+type StepSnapshot struct {
+	HeadSHA string `json:"head_sha,omitempty"`
+}
+
+// StepMarkInput is POST /api/steps/{id}/start and .../done's body.
+type StepMarkInput struct {
+	Note      string        `json:"note,omitempty"`
+	Snapshot  *StepSnapshot `json:"git_snapshot,omitempty"`
+	SessionID string        `json:"session_id,omitempty"`
+}
+
+// StepStatusResult is the response from start and done: just the status
+// the step landed on, so a caller can confirm the transition took without
+// a second read.
+type StepStatusResult struct {
+	Status string `json:"status"`
+}
+
+// DropStepInput is POST /api/steps/{id}/drop's body.
+type DropStepInput struct {
+	Reason    string `json:"reason,omitempty"`
+	SessionID string `json:"session_id,omitempty"`
+}
+
+// PromoteStepInput is POST /api/steps/{id}/promote's body. Block is a
+// *bool: nil omits it from the wire so the server's own default (true,
+// for a child issue) applies; only --no-block sets it, to false.
+type PromoteStepInput struct {
+	Became    string `json:"became,omitempty"`
+	Block     *bool  `json:"block,omitempty"`
+	Reason    string `json:"reason,omitempty"`
+	Title     string `json:"title,omitempty"`
+	SessionID string `json:"session_id,omitempty"`
+}
+
+// PromoteResult names what a step became.
+type PromoteResult struct {
+	StepID    string `json:"step_id"`
+	Became    string `json:"became"`
+	TargetID  string `json:"target_id"`
+	TargetRef string `json:"target_ref,omitempty"`
+	Blocked   bool   `json:"blocked"`
 }

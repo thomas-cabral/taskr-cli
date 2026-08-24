@@ -320,6 +320,105 @@ func RenderProjects(w io.Writer, rows []ProjectView) {
 	}
 }
 
+// stepGlyph is the one-character status vocabulary `step ls` prints per
+// row. The codebase's one existing glyph pair — ○/✓ on a group walk — is a
+// binary open/closed view and does not stretch to a step's six statuses,
+// so this defines its own rather than force-fitting that one. Plain ASCII,
+// not Unicode, so a plain terminal or a log file renders it the same way.
+func stepGlyph(status string) string {
+	switch status {
+	case "pending":
+		return "."
+	case "in_progress":
+		return ">"
+	case "done":
+		return "x"
+	case "dropped":
+		return "~"
+	case "promoted":
+		return "^"
+	case "abandoned":
+		return "-"
+	default:
+		return "?"
+	}
+}
+
+// latestSHA returns the most recent head SHA a step's marks recorded, or
+// "" if none carried one — a mark's snapshot is only ever sent when the
+// caller had a TASKR_HEAD to report.
+func latestSHA(marks []MarkView) string {
+	for i := len(marks) - 1; i >= 0; i-- {
+		if marks[i].HeadSHA != "" {
+			return marks[i].HeadSHA
+		}
+	}
+	return ""
+}
+
+// stepNote is the one extra fact worth a column of its own: the SHA a step
+// in progress was last marked at, or what a step that left the plan became
+// or why. Every other status has nothing more to say.
+func stepNote(s StepView) string {
+	switch s.Status {
+	case "in_progress":
+		if sha := latestSHA(s.Marks); sha != "" {
+			return "since " + sha
+		}
+	case "dropped":
+		if s.DropReason != "" {
+			return "dropped: " + s.DropReason
+		}
+		return "dropped"
+	case "promoted":
+		ref := s.PromotedRef
+		if ref == "" {
+			ref = s.PromotedTo
+		}
+		if ref != "" {
+			return "promoted -> " + ref
+		}
+		return "promoted"
+	}
+	return ""
+}
+
+// renderStepRows writes one line per step — position, status glyph, title,
+// and stepNote's one extra fact — or the empty-plan line when there are
+// none. Shared by RenderSteps (`step ls`, with a progress header ahead of
+// it) and `step drop`'s output (the plan as it stands right after the
+// drop; that response carries no step_progress to head it with).
+func renderStepRows(w io.Writer, steps []StepView) {
+	if len(steps) == 0 {
+		fmt.Fprintln(w, "  no steps yet — `taskr step add` to start the plan")
+		return
+	}
+	tw := tabwriter.NewWriter(w, 0, 2, 2, ' ', 0)
+	for _, s := range steps {
+		fmt.Fprintf(tw, "  %d\t%s\t%s\t%s\n", s.Position, stepGlyph(s.Status), s.Title, stepNote(s))
+	}
+	tw.Flush()
+}
+
+// RenderSteps renders `taskr step ls`: this is what a person and a cold
+// agent both read to see where the work stands, so the header names the
+// issue and leads with how much of the plan is done — read straight off
+// issue.StepProgress, computed server-side (internal/app/step.go's
+// StepProgress), rather than recomputed here. The counting rule (which
+// statuses count on which side of the fraction) should exist once, on the
+// server; a client-side copy is a client that can silently disagree with
+// it the day that rule changes. StepProgress is nil for an issue with no
+// steps, in which case the header names just the issue and renderStepRows
+// prints the empty-plan line.
+func RenderSteps(w io.Writer, issue IssueView) {
+	fmt.Fprintf(w, "%s — %s", issue.Ref, issue.Title)
+	if p := issue.StepProgress; p != nil {
+		fmt.Fprintf(w, "   %d/%d done", p.Done, p.Total)
+	}
+	fmt.Fprintln(w)
+	renderStepRows(w, issue.Steps)
+}
+
 func indent(s string) string {
 	return strings.ReplaceAll(strings.TrimSpace(s), "\n", "\n  ")
 }

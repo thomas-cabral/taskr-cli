@@ -38,6 +38,14 @@ Usage:
   taskr check ls <ref>                   list an issue's checks
   taskr check run <id> --pass|--fail [--measure metric=value[unit]]
                                           record a result
+  taskr step ls <ref>                    an issue's ordered working plan
+  taskr step add <ref> "title" ["title" ...] [--after <pos|id>] [--body <text>]
+  taskr step start <ref> <pos|id> [-m <note>]
+  taskr step done <ref> <pos|id> [-m <note>]
+  taskr step mv <ref> <pos|id> --after <pos|id>|--front
+  taskr step edit <ref> <pos|id> [--title <text>] [--body <text>]
+  taskr step drop <ref> <pos|id> -m <reason>
+  taskr step promote <ref> <pos|id> [--child|--check] [--no-block] [-m <reason>] [--title <text>]
   taskr timeline <ref>                   the event ledger
   taskr doc <ref>                        documents linked to an issue
   taskr doc add <ref> -f <path> [-t spec|plan|note] [--title T]
@@ -149,6 +157,8 @@ func Run(args []string, stdout, stderr io.Writer, getenv func(string) string) in
 		run = func() error { return runGroup(ctx, client, rest, stdout, stderr) }
 	case "check":
 		run = func() error { return runCheck(ctx, client, rest, stdout, stderr, getenv) }
+	case "step":
+		run = func() error { return runStep(ctx, client, rest, stdout, stderr, session, getenv) }
 	case "project":
 		run = func() error { return runProject(ctx, client, rest, stdout, stderr, getenv) }
 	default:
@@ -908,6 +918,400 @@ func cmdCheckRun(ctx context.Context, c *Client, args []string, stdout, stderr i
 		return printJSON(stdout, run)
 	}
 	fmt.Fprintf(stdout, "Recorded %s (run %s).\n", outcome, run.ID)
+	return nil
+}
+
+// runStep dispatches `taskr step ls|add|start|done|mv|edit|drop|promote`.
+func runStep(ctx context.Context, c *Client, args []string, stdout, stderr io.Writer, session string, getenv func(string) string) error {
+	if len(args) == 0 {
+		return fmt.Errorf("usage: taskr step ls|add|start|done|mv|edit|drop|promote …")
+	}
+	sub, rest := args[0], args[1:]
+	switch sub {
+	case "ls":
+		return cmdStepLs(ctx, c, rest, stdout, stderr)
+	case "add":
+		return cmdStepAdd(ctx, c, rest, stdout, stderr, session)
+	case "start":
+		return cmdStepStart(ctx, c, rest, stdout, stderr, session, getenv)
+	case "done":
+		return cmdStepDone(ctx, c, rest, stdout, stderr, session, getenv)
+	case "mv":
+		return cmdStepMv(ctx, c, rest, stdout, stderr, session)
+	case "edit":
+		return cmdStepEdit(ctx, c, rest, stdout, stderr, session)
+	case "drop":
+		return cmdStepDrop(ctx, c, rest, stdout, stderr, session)
+	case "promote":
+		return cmdStepPromote(ctx, c, rest, stdout, stderr, session)
+	default:
+		return fmt.Errorf("usage: taskr step ls|add|start|done|mv|edit|drop|promote …")
+	}
+}
+
+// resolveStepID turns a step selector into a step id. A selector that
+// parses as a positive integer is a POSITION — the number `taskr step ls`
+// printed next to a row — and resolving it costs one extra read
+// (ListSteps) to find whichever step currently sits there. Anything else
+// is already a step id and is passed straight through, no read at all.
+//
+// Positions can shift between an `ls` and this call if someone else moves
+// or drops a step in the meantime; that race is inherent to positional
+// shorthand. This function does not try to defeat it — the id form
+// (whatever `ls` or --json printed for a given step) is the way out of the
+// race, not something resolved here.
+func resolveStepID(ctx context.Context, c *Client, ref, selector string) (string, error) {
+	pos, err := strconv.Atoi(selector)
+	if err != nil || pos <= 0 {
+		return selector, nil
+	}
+	steps, err := c.ListSteps(ctx, ref)
+	if err != nil {
+		return "", err
+	}
+	for _, s := range steps {
+		if s.Position == pos {
+			return s.ID, nil
+		}
+	}
+	if len(steps) == 0 {
+		return "", fmt.Errorf("no step at position %d — %s has no steps", pos, ref)
+	}
+	return "", fmt.Errorf("no step at position %d — valid range is 1-%d", pos, len(steps))
+}
+
+// stepSnapshot builds a mark's git snapshot from TASKR_HEAD, the only
+// piece of tree state this CLI ever reads — it never runs git itself.
+// There is no TASKR_BRANCH or TASKR_DIRTY: branch and dirty-count stay
+// empty from this client. The snapshot is omitted from the wire entirely,
+// not sent with an empty head_sha, when TASKR_HEAD is unset.
+func stepSnapshot(getenv func(string) string) *StepSnapshot {
+	head := strings.TrimSpace(getenv("TASKR_HEAD"))
+	if head == "" {
+		return nil
+	}
+	return &StepSnapshot{HeadSHA: head}
+}
+
+func cmdStepLs(ctx context.Context, c *Client, args []string, stdout, stderr io.Writer) error {
+	fs := flag.NewFlagSet("step ls", flag.ContinueOnError)
+	fs.SetOutput(stderr)
+	jsonOut := fs.Bool("json", false, "output JSON")
+	positional, err := parseFlags(fs, args)
+	if err != nil {
+		return err
+	}
+	if len(positional) < 1 {
+		return fmt.Errorf("usage: taskr step ls <ref> [--json]")
+	}
+	ref := positional[0]
+	// Read the issue, not the steps endpoint: GetIssue carries StepProgress
+	// alongside Steps, computed server-side (internal/app/step.go's
+	// StepProgress), so the fraction `step ls` prints is never a second
+	// copy of that counting rule left to drift from the server's own.
+	issue, err := c.GetIssue(ctx, ref, false)
+	if err != nil {
+		return err
+	}
+	if *jsonOut {
+		// The JSON contract stays focused on steps, not the whole issue —
+		// a caller asking for the plan should not have to pick it out of
+		// everything else GetIssue carries. A nil Steps (no steps yet, and
+		// the server omits the key rather than sending an empty array)
+		// still prints as [], matching what ListSteps itself would answer.
+		steps := issue.Steps
+		if steps == nil {
+			steps = []StepView{}
+		}
+		return printJSON(stdout, steps)
+	}
+	RenderSteps(stdout, issue)
+	return nil
+}
+
+func cmdStepAdd(ctx context.Context, c *Client, args []string, stdout, stderr io.Writer, session string) error {
+	fs := flag.NewFlagSet("step add", flag.ContinueOnError)
+	fs.SetOutput(stderr)
+	after := fs.String("after", "", "position or step id to insert after; omitted appends to the end")
+	body := fs.String("body", "", "body text — only meaningful when adding a single title")
+	jsonOut := fs.Bool("json", false, "output JSON")
+	positional, err := parseFlags(fs, args)
+	if err != nil {
+		return err
+	}
+	if len(positional) < 2 {
+		return fmt.Errorf(`usage: taskr step add <ref> "title" ["title" ...] [--after <pos|id>] [--body <text>]`)
+	}
+	ref, titles := positional[0], positional[1:]
+
+	afterID := ""
+	if *after != "" {
+		afterID, err = resolveStepID(ctx, c, ref, *after)
+		if err != nil {
+			return err
+		}
+	}
+
+	refs, err := c.AddSteps(ctx, ref, AddStepsInput{
+		Titles: titles, Body: *body, After: afterID, SessionID: session,
+	})
+	if err != nil {
+		return err
+	}
+	if *jsonOut {
+		return printJSON(stdout, refs)
+	}
+	for _, r := range refs {
+		fmt.Fprintf(stdout, "Added step %s to %s.\n", r.ID, r.Issue.Ref)
+	}
+	fmt.Fprintf(stdout, "`taskr step ls %s` to see the plan.\n", ref)
+	return nil
+}
+
+func cmdStepStart(ctx context.Context, c *Client, args []string, stdout, stderr io.Writer, session string, getenv func(string) string) error {
+	fs := flag.NewFlagSet("step start", flag.ContinueOnError)
+	fs.SetOutput(stderr)
+	note := fs.String("m", "", "note")
+	jsonOut := fs.Bool("json", false, "output JSON")
+	positional, err := parseFlags(fs, args)
+	if err != nil {
+		return err
+	}
+	if len(positional) < 2 {
+		return fmt.Errorf("usage: taskr step start <ref> <pos|id> [-m <note>]")
+	}
+	ref, selector := positional[0], positional[1]
+	stepID, err := resolveStepID(ctx, c, ref, selector)
+	if err != nil {
+		return err
+	}
+	res, err := c.StartStep(ctx, stepID, StepMarkInput{
+		Note: *note, Snapshot: stepSnapshot(getenv), SessionID: session,
+	})
+	if err != nil {
+		return err
+	}
+	if *jsonOut {
+		return printJSON(stdout, res)
+	}
+	fmt.Fprintf(stdout, "Started %s (%s).\n", stepID, res.Status)
+	return nil
+}
+
+func cmdStepDone(ctx context.Context, c *Client, args []string, stdout, stderr io.Writer, session string, getenv func(string) string) error {
+	fs := flag.NewFlagSet("step done", flag.ContinueOnError)
+	fs.SetOutput(stderr)
+	note := fs.String("m", "", "note")
+	jsonOut := fs.Bool("json", false, "output JSON")
+	positional, err := parseFlags(fs, args)
+	if err != nil {
+		return err
+	}
+	if len(positional) < 2 {
+		return fmt.Errorf("usage: taskr step done <ref> <pos|id> [-m <note>]")
+	}
+	ref, selector := positional[0], positional[1]
+	stepID, err := resolveStepID(ctx, c, ref, selector)
+	if err != nil {
+		return err
+	}
+	res, err := c.DoneStep(ctx, stepID, StepMarkInput{
+		Note: *note, Snapshot: stepSnapshot(getenv), SessionID: session,
+	})
+	if err != nil {
+		return err
+	}
+	if *jsonOut {
+		return printJSON(stdout, res)
+	}
+	fmt.Fprintf(stdout, "Done %s (%s). Next: `taskr step ls %s`.\n", stepID, res.Status, ref)
+	return nil
+}
+
+// cmdStepMv moves a step within its plan. --front and an explicit,
+// possibly empty, --after both mean the same thing on the wire — After
+// left empty — but the flag has to be seen as PASSED to mean it, so an
+// invocation that names neither is refused rather than silently treated
+// as a move to the front.
+func cmdStepMv(ctx context.Context, c *Client, args []string, stdout, stderr io.Writer, session string) error {
+	fs := flag.NewFlagSet("step mv", flag.ContinueOnError)
+	fs.SetOutput(stderr)
+	after := fs.String("after", "", `position or step id to move after; "" moves to the front`)
+	front := fs.Bool("front", false, "move to the front of the plan")
+	jsonOut := fs.Bool("json", false, "output JSON")
+	positional, err := parseFlags(fs, args)
+	if err != nil {
+		return err
+	}
+	if len(positional) < 2 {
+		return fmt.Errorf("usage: taskr step mv <ref> <pos|id> --after <pos|id>|--front")
+	}
+	afterSet := false
+	fs.Visit(func(f *flag.Flag) {
+		if f.Name == "after" {
+			afterSet = true
+		}
+	})
+	if !*front && !afterSet {
+		return fmt.Errorf("usage: taskr step mv <ref> <pos|id> --after <pos|id>|--front")
+	}
+	ref, selector := positional[0], positional[1]
+	stepID, err := resolveStepID(ctx, c, ref, selector)
+	if err != nil {
+		return err
+	}
+
+	afterID := ""
+	if !*front && *after != "" {
+		afterID, err = resolveStepID(ctx, c, ref, *after)
+		if err != nil {
+			return err
+		}
+	}
+
+	if err := c.MoveStep(ctx, stepID, MoveStepInput{After: afterID, SessionID: session}); err != nil {
+		return err
+	}
+	if *jsonOut {
+		return printJSON(stdout, okResult{OK: true})
+	}
+	if afterID == "" {
+		fmt.Fprintf(stdout, "Moved %s to the front of %s's plan.\n", stepID, ref)
+	} else {
+		fmt.Fprintf(stdout, "Moved %s after %s.\n", stepID, afterID)
+	}
+	return nil
+}
+
+func cmdStepEdit(ctx context.Context, c *Client, args []string, stdout, stderr io.Writer, session string) error {
+	fs := flag.NewFlagSet("step edit", flag.ContinueOnError)
+	fs.SetOutput(stderr)
+	title := fs.String("title", "", "new title")
+	body := fs.String("body", "", "new body")
+	jsonOut := fs.Bool("json", false, "output JSON")
+	positional, err := parseFlags(fs, args)
+	if err != nil {
+		return err
+	}
+	if len(positional) < 2 {
+		return fmt.Errorf("usage: taskr step edit <ref> <pos|id> [--title <text>] [--body <text>]")
+	}
+
+	// Checked before resolving the selector: a purely local usage error
+	// (neither flag given) should fail before spending a ListSteps round
+	// trip on a position that was never going to be used. Title and Body
+	// only ride along when the flag was actually passed — including when
+	// passed empty — so an unset field leaves the step untouched
+	// server-side, and an explicitly empty --title reaches the server's
+	// own refusal instead of being swallowed here.
+	var titlePtr, bodyPtr *string
+	fs.Visit(func(f *flag.Flag) {
+		switch f.Name {
+		case "title":
+			titlePtr = title
+		case "body":
+			bodyPtr = body
+		}
+	})
+	if titlePtr == nil && bodyPtr == nil {
+		return fmt.Errorf("usage: taskr step edit <ref> <pos|id> [--title <text>] [--body <text>] — at least one is required")
+	}
+
+	ref, selector := positional[0], positional[1]
+	stepID, err := resolveStepID(ctx, c, ref, selector)
+	if err != nil {
+		return err
+	}
+
+	if err := c.EditStep(ctx, stepID, EditStepInput{Title: titlePtr, Body: bodyPtr, SessionID: session}); err != nil {
+		return err
+	}
+	if *jsonOut {
+		return printJSON(stdout, okResult{OK: true})
+	}
+	fmt.Fprintf(stdout, "Edited %s.\n", stepID)
+	return nil
+}
+
+func cmdStepDrop(ctx context.Context, c *Client, args []string, stdout, stderr io.Writer, session string) error {
+	fs := flag.NewFlagSet("step drop", flag.ContinueOnError)
+	fs.SetOutput(stderr)
+	reason := fs.String("m", "", "why the step was dropped")
+	jsonOut := fs.Bool("json", false, "output JSON")
+	positional, err := parseFlags(fs, args)
+	if err != nil {
+		return err
+	}
+	if len(positional) < 2 || *reason == "" {
+		return fmt.Errorf("usage: taskr step drop <ref> <pos|id> -m <reason>")
+	}
+	ref, selector := positional[0], positional[1]
+	stepID, err := resolveStepID(ctx, c, ref, selector)
+	if err != nil {
+		return err
+	}
+	steps, err := c.DropStep(ctx, stepID, DropStepInput{Reason: *reason, SessionID: session})
+	if err != nil {
+		return err
+	}
+	if *jsonOut {
+		return printJSON(stdout, steps)
+	}
+	fmt.Fprintf(stdout, "Dropped %s.\n", stepID)
+	// DropStep's response is the plan as it stands, not an IssueView — it
+	// carries no step_progress to head a fraction with, so this prints the
+	// rows alone rather than routing through RenderSteps.
+	renderStepRows(stdout, steps)
+	return nil
+}
+
+func cmdStepPromote(ctx context.Context, c *Client, args []string, stdout, stderr io.Writer, session string) error {
+	fs := flag.NewFlagSet("step promote", flag.ContinueOnError)
+	fs.SetOutput(stderr)
+	child := fs.Bool("child", false, "promote to a new child issue (default)")
+	check := fs.Bool("check", false, "promote to a check")
+	noBlock := fs.Bool("no-block", false, "do not have the new child issue block this one")
+	reason := fs.String("m", "", "reason")
+	title := fs.String("title", "", "title for the promoted target; defaults to the step's own title")
+	jsonOut := fs.Bool("json", false, "output JSON")
+	positional, err := parseFlags(fs, args)
+	if err != nil {
+		return err
+	}
+	if len(positional) < 2 {
+		return fmt.Errorf("usage: taskr step promote <ref> <pos|id> [--child|--check] [--no-block] [-m <reason>] [--title <text>]")
+	}
+	if *child && *check {
+		return fmt.Errorf("--child and --check are mutually exclusive")
+	}
+	ref, selector := positional[0], positional[1]
+	stepID, err := resolveStepID(ctx, c, ref, selector)
+	if err != nil {
+		return err
+	}
+
+	became := "issue"
+	if *check {
+		became = "check"
+	}
+	in := PromoteStepInput{Became: became, Reason: *reason, Title: *title, SessionID: session}
+	if *noBlock {
+		block := false
+		in.Block = &block
+	}
+
+	res, err := c.PromoteStep(ctx, stepID, in)
+	if err != nil {
+		return err
+	}
+	if *jsonOut {
+		return printJSON(stdout, res)
+	}
+	fmt.Fprintf(stdout, "Promoted %s to %s %s", stepID, res.Became, res.TargetRef)
+	if res.Became == "issue" && res.Blocked {
+		fmt.Fprintf(stdout, " (blocking %s)", ref)
+	}
+	fmt.Fprintln(stdout, ".")
 	return nil
 }
 
