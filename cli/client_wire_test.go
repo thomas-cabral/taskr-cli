@@ -117,6 +117,60 @@ func TestRemoveChildDeletesCorrectPath(t *testing.T) {
 	}
 }
 
+// TestRelateIssuesPostsCorrectBody pins the wire shape behind `taskr
+// relate`: POST /api/issues/{ref}/relate with to, type and remove all
+// present on the body — remove:false included explicitly, not omitted,
+// since that is relate's own meaningful value.
+func TestRelateIssuesPostsCorrectBody(t *testing.T) {
+	var gotMethod, gotPath, gotBody string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotMethod = r.Method
+		gotPath = r.URL.Path
+		b, _ := io.ReadAll(r.Body)
+		gotBody = strings.TrimSpace(string(b))
+		w.WriteHeader(http.StatusNoContent)
+	}))
+	defer srv.Close()
+
+	c := &cli.Client{BaseURL: srv.URL}
+	in := cli.RelateInput{To: "TSK-2", Type: "BLOCKS", Remove: false, SessionID: "sess-1"}
+	if err := c.RelateIssues(context.Background(), "TSK-1", in); err != nil {
+		t.Fatalf("RelateIssues: %v", err)
+	}
+	if gotMethod != http.MethodPost {
+		t.Errorf("method = %q, want POST", gotMethod)
+	}
+	if gotPath != "/api/issues/TSK-1/relate" {
+		t.Errorf("path = %q, want /api/issues/TSK-1/relate", gotPath)
+	}
+	want := `{"to":"TSK-2","type":"BLOCKS","remove":false,"session_id":"sess-1"}`
+	if gotBody != want {
+		t.Errorf("body = %q, want %q", gotBody, want)
+	}
+}
+
+// TestRelateIssuesRemoveTrueDeletesTheEdge pins the other half: remove
+// rides the same endpoint and the same body shape, just flipped, rather
+// than a second path taskr unrelate hits.
+func TestRelateIssuesRemoveTrueDeletesTheEdge(t *testing.T) {
+	var gotBody string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		b, _ := io.ReadAll(r.Body)
+		gotBody = strings.TrimSpace(string(b))
+		w.WriteHeader(http.StatusNoContent)
+	}))
+	defer srv.Close()
+
+	c := &cli.Client{BaseURL: srv.URL}
+	in := cli.RelateInput{To: "TSK-2", Type: "BLOCKS", Remove: true, SessionID: "sess-1"}
+	if err := c.RelateIssues(context.Background(), "TSK-1", in); err != nil {
+		t.Fatalf("RelateIssues: %v", err)
+	}
+	if !strings.Contains(gotBody, `"remove":true`) {
+		t.Errorf("body = %q, want remove:true", gotBody)
+	}
+}
+
 // TestUpdateIssueDecodesGroupHint pins that a close response's group_hint —
 // the nudge toward a parent's next open child — survives the trip into
 // UpdateIssueResult, nested NextChild included.
