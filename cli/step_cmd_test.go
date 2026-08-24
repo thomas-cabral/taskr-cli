@@ -239,8 +239,10 @@ func TestStepStartWithHeadSHA(t *testing.T) {
 
 // TestStepStartWithoutHeadSHA exercises the other half: with no
 // TASKR_HEAD, the snapshot is omitted from the wire entirely, not sent
-// empty.
+// empty. Run from outside any checkout, since a repo underfoot is a head
+// the CLI can read for itself.
 func TestStepStartWithoutHeadSHA(t *testing.T) {
+	t.Chdir(t.TempDir())
 	var gotBody string
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		b, _ := io.ReadAll(r.Body)

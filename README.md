@@ -4,10 +4,12 @@
 server — issues, specs and plans that survive losing context, whether the
 caller is a person or an agent shelling out between turns.
 
-It is an HTTP client and nothing else: it holds no domain logic, never
-opens a database, and never shells out to git — git state (remote, HEAD) is
-something a caller reports, not something `taskr` goes and gets. This repo
-builds only the `taskr` binary; it does not include the server.
+It is an HTTP client and nothing else: it holds no domain logic and never
+opens a database. It never shells out to git either — it reads git's own
+files to know which checkout you are in (origin, worktree root, HEAD,
+branch), and anything that would need git itself to compute, like a merge
+base or a dirty list, stays something the caller reports. This repo builds
+only the `taskr` binary; it does not include the server.
 
 ## Install
 
@@ -26,6 +28,19 @@ curl -fsSL https://aitaskr.com/install.sh | sh
 This puts the binary in `~/.local/bin`; set `TASKR_INSTALL_DIR` to install
 somewhere else. Not yet live — it starts working with the next site
 deploy; until then, use `go install` above or the releases page below.
+
+It also installs the agent skills, which is how a coding agent learns taskr
+exists at all. Set `TASKR_SKILLS=0` to skip that, or run it yourself later:
+
+```bash
+taskr skill install    # ~/.agents/skills (Codex, Cursor, opencode)
+                       # ~/.claude/skills (Claude Code)
+taskr skill ls         # where they are, and whether they match this binary
+```
+
+The skills ship inside the binary, so `taskr skill install` after an
+upgrade rewrites them in step with the verbs the binary actually has.
+`go install` does not run it for you — run it once by hand.
 
 Windows: grab `taskr_<version>_windows_amd64.zip` from the
 [releases page](https://github.com/thomas-cabral/taskr-cli/releases).
@@ -134,28 +149,33 @@ Environment variables:
   it at a self-hosted instance, or at `127.0.0.1:8099` for a local one)
 - `TASKR_KEY` — overrides whatever is stored for the selected host
 - `TASKR_SESSION` — names this invocation context, so two terminals (or a
-  terminal and an agent) on one machine do not share a work session;
-  defaults to the parent process id
-- `TASKR_REMOTE`, `TASKR_ROOT`, `TASKR_HEAD` — the output of
-  `git remote get-url origin`, `git rev-parse --show-toplevel` and
-  `git rev-parse HEAD`. `taskr` never runs git; exporting these lets it
-  resolve your project from the repo and directory you are in, keep rot
-  detection fed, and scope `new`, `offload`, `next` and `ls` to it.
-- `TASKR_BRANCH`, `TASKR_MERGE_BASE`, `TASKR_DIRTY` — the rest of the tree
-  state `new`, `offload` and `park` record on an issue, so `taskr start`
-  can tell the next reader where the work lives:
+  terminal and an agent) on one machine do not share a work session.
+  Defaults to a session id the harness published (`CLAUDE_CODE_SESSION_ID`,
+  `OPENCODE_PID`), and failing that to the parent process id. Export it
+  yourself under a harness that publishes neither and spawns a fresh shell
+  per tool call, where the parent process id changes on every command.
+- `TASKR_REMOTE`, `TASKR_ROOT`, `TASKR_HEAD`, `TASKR_BRANCH` — **you do not
+  need to export these.** `taskr` reads them out of `.git` — `config` for
+  the origin remote, `HEAD` and the refs (loose or packed) for the commit
+  and branch, following `commondir` in a linked worktree — which is what
+  resolves your project, scopes `new`, `offload`, `next` and `ls` to it,
+  and keeps rot detection fed. It reads git's files; it does not run git,
+  and does not need it installed. Export one only to override it, e.g. to
+  file work against a repo you are not standing in.
+- `TASKR_MERGE_BASE`, `TASKR_DIRTY` — the two parts of the tree state
+  `taskr` cannot read for itself, since a merge base needs a commit-graph
+  walk and a dirty list needs the index diffed against the worktree:
 
   ```sh
-  export TASKR_BRANCH=$(git branch --show-current)
   export TASKR_MERGE_BASE=$(git merge-base HEAD origin/HEAD)
   export TASKR_DIRTY=$(git status --porcelain | cut -c4-)   # one path per line
   ```
 
-  `TASKR_HEAD` is the gate: with no commit to anchor it, no snapshot is
-  sent at all, because a block of blank fields is worse than an honest
-  "no git snapshot has been recorded". The others are best-effort — a
-  detached HEAD has no branch and records as `(detached)` rather than
-  costing you the snapshot.
+  A head is the gate: with no commit to anchor it — nothing exported and no
+  checkout to read — no snapshot is sent at all, because a block of blank
+  fields is worse than an honest "no git snapshot has been recorded". The
+  others are best-effort; a detached HEAD has no branch and records as
+  `(detached)` rather than costing you the snapshot.
 
 ## Stability
 
