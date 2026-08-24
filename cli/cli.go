@@ -1144,24 +1144,11 @@ func resolveStepID(ctx context.Context, c *Client, ref, selector string) (string
 	return "", fmt.Errorf("no step at position %d — valid range is 1-%d", pos, len(steps))
 }
 
-// stepSnapshot builds a MARK's git snapshot, which carries head_sha and
-// nothing else — that is the whole of what POST /api/steps/{id}/start and
-// .../done accept. An issue's snapshot is a different, wider shape; see
-// gitSnapshot. The snapshot is omitted from the wire entirely, not sent
-// with an empty head_sha, when TASKR_HEAD is unset.
-func stepSnapshot(getenv func(string) string) *StepSnapshot {
-	head := strings.TrimSpace(getenv("TASKR_HEAD"))
-	if head == "" {
-		return nil
-	}
-	return &StepSnapshot{HeadSHA: head}
-}
-
-// gitSnapshot builds the tree state `new`, `offload` and `park` record on
-// an issue, entirely from the environment. The first four are read out of
-// .git when the caller exported nothing (repo.go); the last two are the
-// caller's to supply, because answering them needs git itself rather than
-// a file:
+// gitSnapshot builds the tree state `new`, `offload`, `park` and a step
+// mark (`step start`/`step done`) all record, entirely from the
+// environment. The first four are read out of .git when the caller
+// exported nothing (repo.go); the last two are the caller's to supply,
+// because answering them needs git itself rather than a file:
 //
 //	TASKR_REMOTE     .git/config remote.origin.url    → repo
 //	TASKR_BRANCH     .git/HEAD                        → branch
@@ -1172,9 +1159,9 @@ func stepSnapshot(getenv func(string) string) *StepSnapshot {
 //
 // TASKR_HEAD is the gate. Without a commit to anchor it there is nothing to
 // resume from, so the snapshot is omitted from the wire entirely rather
-// than sent as a block of blanks — the same rule stepSnapshot follows, and
-// the reason "no git snapshot has been recorded" stays an honest answer
-// rather than becoming a lie told in more fields.
+// than sent as a block of blanks, and the reason "no git snapshot has been
+// recorded" stays an honest answer rather than becoming a lie told in more
+// fields.
 //
 // Everything else is best-effort and omitted when unset. Branch especially:
 // a detached HEAD has no branch, and dropping the whole snapshot over that
@@ -1302,7 +1289,7 @@ func cmdStepStart(ctx context.Context, c *Client, args []string, stdout, stderr 
 		return err
 	}
 	res, err := c.StartStep(ctx, stepID, StepMarkInput{
-		Note: *note, Snapshot: stepSnapshot(getenv), SessionID: session,
+		Note: *note, Snapshot: gitSnapshot(getenv), SessionID: session,
 	})
 	if err != nil {
 		return err
@@ -1332,7 +1319,7 @@ func cmdStepDone(ctx context.Context, c *Client, args []string, stdout, stderr i
 		return err
 	}
 	res, err := c.DoneStep(ctx, stepID, StepMarkInput{
-		Note: *note, Snapshot: stepSnapshot(getenv), SessionID: session,
+		Note: *note, Snapshot: gitSnapshot(getenv), SessionID: session,
 	})
 	if err != nil {
 		return err

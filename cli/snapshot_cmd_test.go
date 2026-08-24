@@ -58,9 +58,10 @@ func TestNewSendsTheGitSnapshot(t *testing.T) {
 	}
 }
 
-// TestNewOmitsTheSnapshotWithoutAHead pins the rule stepSnapshot already
-// follows: no head, no snapshot. An empty one on the wire would turn the
-// honest "none recorded" line into a block of blanks.
+// TestNewOmitsTheSnapshotWithoutAHead pins the rule a step mark follows
+// too (see TestStepStartWithoutHeadSHA): no head, no snapshot. An empty
+// one on the wire would turn the honest "none recorded" line into a block
+// of blanks.
 //
 // "Without a head" now means the caller exported none AND there is no
 // checkout to read one out of, which is why this runs from a directory that

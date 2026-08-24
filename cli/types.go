@@ -487,20 +487,15 @@ type MoveStepInput struct {
 	SessionID string `json:"session_id,omitempty"`
 }
 
-// StepSnapshot is the git snapshot a start or done mark carries. taskr
-// never runs git, and neither does this client: it only ever reads
-// TASKR_HEAD, so HeadSHA is the one field it ever sets. There is no
-// TASKR_BRANCH or TASKR_DIRTY — branch and dirty-count stay empty from
-// this client, left for whatever else records a mark to fill in.
-type StepSnapshot struct {
-	HeadSHA string `json:"head_sha,omitempty"`
-}
-
-// StepMarkInput is POST /api/steps/{id}/start and .../done's body.
+// StepMarkInput is POST /api/steps/{id}/start and .../done's body. The
+// snapshot is the same GitSnapshotInput new, offload and park send — a
+// mark is a write like any other, and internal/projection/steps.go's
+// writeMark already stores branch and dirty_count into step_marks, so
+// there is no narrower shape to carry here.
 type StepMarkInput struct {
-	Note      string        `json:"note,omitempty"`
-	Snapshot  *StepSnapshot `json:"git_snapshot,omitempty"`
-	SessionID string        `json:"session_id,omitempty"`
+	Note      string            `json:"note,omitempty"`
+	Snapshot  *GitSnapshotInput `json:"git_snapshot,omitempty"`
+	SessionID string            `json:"session_id,omitempty"`
 }
 
 // StepStatusResult is the response from start and done: just the status
