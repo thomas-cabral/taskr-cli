@@ -262,6 +262,25 @@ func (c *Client) Timeline(ctx context.Context, ref string) ([]TimelineEntry, err
 
 // --- Writes ---
 
+// GitSnapshotInput is the tree state a write records on an issue: where the
+// work is, on what branch, at which commit. It is what makes `taskr start`
+// print a real "Tree state:" block instead of "no git snapshot has been
+// recorded for this issue" (TSK-110).
+//
+// Every field comes from the environment, because taskr never runs git —
+// see gitSnapshot for which variable feeds which field. Branch is
+// omitempty on purpose: a detached HEAD has no branch, and the head is
+// still worth recording, so the field goes missing rather than empty and
+// the renderer says so out loud.
+type GitSnapshotInput struct {
+	Repo       string   `json:"repo,omitempty"`
+	Branch     string   `json:"branch,omitempty"`
+	HeadSHA    string   `json:"head_sha"`
+	DirtyFiles []string `json:"dirty_files,omitempty"`
+	Worktree   string   `json:"worktree,omitempty"`
+	MergeBase  string   `json:"merge_base,omitempty"`
+}
+
 // CreateIssueInput is the wire shape POST /api/issues accepts.
 //
 // ProjectSlug, when set, wins over Locator server-side — an explicit
@@ -269,12 +288,13 @@ func (c *Client) Timeline(ctx context.Context, ref string) ([]TimelineEntry, err
 // standing. Locator carries the fallback: the repo and directory a caller
 // never named a project for.
 type CreateIssueInput struct {
-	Title       string  `json:"title"`
-	Description string  `json:"description,omitempty"`
-	Kind        string  `json:"kind,omitempty"`
-	Priority    string  `json:"priority,omitempty"`
-	ProjectSlug string  `json:"project,omitempty"`
-	Locator     Locator `json:"locator,omitempty"`
+	Title       string            `json:"title"`
+	Description string            `json:"description,omitempty"`
+	Kind        string            `json:"kind,omitempty"`
+	Priority    string            `json:"priority,omitempty"`
+	ProjectSlug string            `json:"project,omitempty"`
+	Locator     Locator           `json:"locator,omitempty"`
+	Snapshot    *GitSnapshotInput `json:"git_snapshot,omitempty"`
 }
 
 func (c *Client) CreateIssue(ctx context.Context, in CreateIssueInput) (IssueRef, error) {
@@ -391,10 +411,15 @@ func (c *Client) StartWork(ctx context.Context, in StartWorkInput) (ResumePacket
 }
 
 // ParkWorkInput is the wire shape POST /api/work/park accepts.
+//
+// The snapshot matters most here of the three: a park is the handoff, and
+// the branch the work was left on is the single most useful fact it can
+// carry to whoever resumes.
 type ParkWorkInput struct {
-	SessionID  string `json:"session_id"`
-	Reason     string `json:"reason,omitempty"`
-	ResumeNote string `json:"resume_note,omitempty"`
+	SessionID  string            `json:"session_id"`
+	Reason     string            `json:"reason,omitempty"`
+	ResumeNote string            `json:"resume_note,omitempty"`
+	Snapshot   *GitSnapshotInput `json:"git_snapshot,omitempty"`
 }
 
 func (c *Client) ParkWork(ctx context.Context, in ParkWorkInput) error {
@@ -418,13 +443,14 @@ func (c *Client) EndWork(ctx context.Context, in EndWorkInput) error {
 // working on. Locator is the fallback for an offload made before any
 // session exists, when there is nothing else to inherit a project from.
 type OffloadInput struct {
-	SessionID   string  `json:"session_id"`
-	Title       string  `json:"title"`
-	Brief       string  `json:"brief"`
-	Kind        string  `json:"kind,omitempty"`
-	Severity    string  `json:"severity,omitempty"`
-	ProjectSlug string  `json:"project,omitempty"`
-	Locator     Locator `json:"locator,omitempty"`
+	SessionID   string            `json:"session_id"`
+	Title       string            `json:"title"`
+	Brief       string            `json:"brief"`
+	Kind        string            `json:"kind,omitempty"`
+	Severity    string            `json:"severity,omitempty"`
+	ProjectSlug string            `json:"project,omitempty"`
+	Locator     Locator           `json:"locator,omitempty"`
+	Snapshot    *GitSnapshotInput `json:"git_snapshot,omitempty"`
 }
 
 func (c *Client) Offload(ctx context.Context, in OffloadInput) (OffloadResult, error) {

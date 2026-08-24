@@ -134,6 +134,21 @@ Environment variables:
   `git rev-parse HEAD`. `taskr` never runs git; exporting these lets it
   resolve your project from the repo and directory you are in, keep rot
   detection fed, and scope `new`, `offload`, `next` and `ls` to it.
+- `TASKR_BRANCH`, `TASKR_MERGE_BASE`, `TASKR_DIRTY` — the rest of the tree
+  state `new`, `offload` and `park` record on an issue, so `taskr start`
+  can tell the next reader where the work lives:
+
+  ```sh
+  export TASKR_BRANCH=$(git branch --show-current)
+  export TASKR_MERGE_BASE=$(git merge-base HEAD origin/HEAD)
+  export TASKR_DIRTY=$(git status --porcelain | cut -c4-)   # one path per line
+  ```
+
+  `TASKR_HEAD` is the gate: with no commit to anchor it, no snapshot is
+  sent at all, because a block of blank fields is worse than an honest
+  "no git snapshot has been recorded". The others are best-effort — a
+  detached HEAD has no branch and records as `(detached)` rather than
+  costing you the snapshot.
 
 ## Stability
 

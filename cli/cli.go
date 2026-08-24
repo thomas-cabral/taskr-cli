@@ -70,6 +70,12 @@ Env: TASKR_API (default https://api.aitaskr.com), TASKR_KEY.
      "git rev-parse HEAD". taskr never runs git; export them and taskr
      resolves your project from the repo and directory you are in, keeps
      rot detection fed, and scopes new, offload, next and ls to it.
+     TASKR_BRANCH, TASKR_MERGE_BASE and TASKR_DIRTY complete the tree state
+     that new, offload and park record on an issue — "git branch
+     --show-current", "git merge-base HEAD origin/HEAD" and "git status
+     --porcelain | cut -c4-" (one path per line). Without TASKR_HEAD no
+     snapshot is sent at all; the rest are best-effort, and a detached HEAD
+     records as "(detached)" rather than dropping the snapshot.
 `
 
 // agentCLI is the agent identifier every session this CLI opens is
@@ -138,7 +144,7 @@ func Run(args []string, stdout, stderr io.Writer, getenv func(string) string) in
 	case "start":
 		run = func() error { return cmdStart(ctx, client, rest, stdout, stderr, machine, session) }
 	case "park":
-		run = func() error { return cmdPark(ctx, client, rest, stdout, stderr, machine, session) }
+		run = func() error { return cmdPark(ctx, client, rest, stdout, stderr, machine, session, getenv) }
 	case "end":
 		run = func() error { return cmdEnd(ctx, client, rest, stdout, stderr, machine, session) }
 	case "close":
@@ -480,6 +486,7 @@ func cmdNew(ctx context.Context, c *Client, args []string, stdout, stderr io.Wri
 	ref, err := c.CreateIssue(ctx, CreateIssueInput{
 		Title: title, Description: *desc, Kind: *kind, Priority: *priority,
 		ProjectSlug: *project, Locator: LocatorFrom(getenv, cwd()),
+		Snapshot: gitSnapshot(getenv),
 	})
 	if err != nil {
 		return err
@@ -539,7 +546,7 @@ func cmdStart(ctx context.Context, c *Client, args []string, stdout, stderr io.W
 	return nil
 }
 
-func cmdPark(ctx context.Context, c *Client, args []string, stdout, stderr io.Writer, machine, agentSession string) error {
+func cmdPark(ctx context.Context, c *Client, args []string, stdout, stderr io.Writer, machine, agentSession string, getenv func(string) string) error {
 	fs := flag.NewFlagSet("park", flag.ContinueOnError)
 	fs.SetOutput(stderr)
 	note := fs.String("m", "", "resume note — the next concrete action")
@@ -556,7 +563,10 @@ func cmdPark(ctx context.Context, c *Client, args []string, stdout, stderr io.Wr
 	if err != nil {
 		return err
 	}
-	if err := c.ParkWork(ctx, ParkWorkInput{SessionID: session.ID, Reason: *reason, ResumeNote: *note}); err != nil {
+	if err := c.ParkWork(ctx, ParkWorkInput{
+		SessionID: session.ID, Reason: *reason, ResumeNote: *note,
+		Snapshot: gitSnapshot(getenv),
+	}); err != nil {
 		return err
 	}
 	if *jsonOut {
@@ -706,6 +716,7 @@ func cmdOffload(ctx context.Context, c *Client, args []string, stdout, stderr io
 	res, err := c.Offload(ctx, OffloadInput{
 		SessionID: session.ID, Title: title, Brief: *brief, Kind: *kind, Severity: *severity,
 		ProjectSlug: *project, Locator: LocatorFrom(getenv, cwd()),
+		Snapshot: gitSnapshot(getenv),
 	})
 	if err != nil {
 		return err
@@ -980,17 +991,67 @@ func resolveStepID(ctx context.Context, c *Client, ref, selector string) (string
 	return "", fmt.Errorf("no step at position %d — valid range is 1-%d", pos, len(steps))
 }
 
-// stepSnapshot builds a mark's git snapshot from TASKR_HEAD, the only
-// piece of tree state this CLI ever reads — it never runs git itself.
-// There is no TASKR_BRANCH or TASKR_DIRTY: branch and dirty-count stay
-// empty from this client. The snapshot is omitted from the wire entirely,
-// not sent with an empty head_sha, when TASKR_HEAD is unset.
+// stepSnapshot builds a MARK's git snapshot, which carries head_sha and
+// nothing else — that is the whole of what POST /api/steps/{id}/start and
+// .../done accept. An issue's snapshot is a different, wider shape; see
+// gitSnapshot. The snapshot is omitted from the wire entirely, not sent
+// with an empty head_sha, when TASKR_HEAD is unset.
 func stepSnapshot(getenv func(string) string) *StepSnapshot {
 	head := strings.TrimSpace(getenv("TASKR_HEAD"))
 	if head == "" {
 		return nil
 	}
 	return &StepSnapshot{HeadSHA: head}
+}
+
+// gitSnapshot builds the tree state `new`, `offload` and `park` record on
+// an issue, entirely from the environment — taskr never runs git, so every
+// value is the output of a git command the CALLER ran and exported:
+//
+//	TASKR_REMOTE     git remote get-url origin        → repo
+//	TASKR_BRANCH     git branch --show-current        → branch
+//	TASKR_HEAD       git rev-parse HEAD               → head_sha
+//	TASKR_ROOT       git rev-parse --show-toplevel    → worktree
+//	TASKR_MERGE_BASE git merge-base HEAD origin/HEAD  → merge_base
+//	TASKR_DIRTY      git status --porcelain | cut -c4- → dirty_files
+//
+// TASKR_HEAD is the gate. Without a commit to anchor it there is nothing to
+// resume from, so the snapshot is omitted from the wire entirely rather
+// than sent as a block of blanks — the same rule stepSnapshot follows, and
+// the reason "no git snapshot has been recorded" stays an honest answer
+// rather than becoming a lie told in more fields.
+//
+// Everything else is best-effort and omitted when unset. Branch especially:
+// a detached HEAD has no branch, and dropping the whole snapshot over that
+// would lose the head as well. The renderer prints "(detached)" for it, so
+// a missing branch is stated rather than left as a gap.
+func gitSnapshot(getenv func(string) string) *GitSnapshotInput {
+	head := strings.TrimSpace(getenv("TASKR_HEAD"))
+	if head == "" {
+		return nil
+	}
+	return &GitSnapshotInput{
+		Repo:       strings.TrimSpace(getenv("TASKR_REMOTE")),
+		Branch:     strings.TrimSpace(getenv("TASKR_BRANCH")),
+		HeadSHA:    head,
+		Worktree:   strings.TrimSpace(getenv("TASKR_ROOT")),
+		MergeBase:  strings.TrimSpace(getenv("TASKR_MERGE_BASE")),
+		DirtyFiles: dirtyFiles(getenv("TASKR_DIRTY")),
+	}
+}
+
+// dirtyFiles splits TASKR_DIRTY into paths. Newline is the natural
+// separator, since the variable is meant to be the output of a git command
+// verbatim; commas are accepted too, for a caller that assembled the list
+// by hand. Blank entries are dropped rather than sent as empty paths.
+func dirtyFiles(v string) []string {
+	var out []string
+	for _, line := range strings.FieldsFunc(v, func(r rune) bool { return r == '\n' || r == ',' }) {
+		if p := strings.TrimSpace(line); p != "" {
+			out = append(out, p)
+		}
+	}
+	return out
 }
 
 func cmdStepLs(ctx context.Context, c *Client, args []string, stdout, stderr io.Writer) error {

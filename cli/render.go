@@ -38,7 +38,7 @@ func RenderResumePacket(p ResumePacket) string {
 	if iv.Snapshot != nil {
 		s := iv.Snapshot
 		fmt.Fprintf(&b, "Tree state (as of %s):\n", s.RecordedAt)
-		fmt.Fprintf(&b, "  %s @ %s  %s\n", s.Repo, s.Branch, s.HeadSHA)
+		fmt.Fprintf(&b, "  %s @ %s  %s\n", s.Repo, branchOrDetached(s.Branch), s.HeadSHA)
 		if s.Worktree != "" {
 			fmt.Fprintf(&b, "  worktree: %s\n", s.Worktree)
 		}
@@ -231,7 +231,7 @@ func RenderIssue(v IssueView, withContext bool) string {
 	}
 	if v.Snapshot != nil {
 		s := v.Snapshot
-		fmt.Fprintf(&b, "\ntree state: %s @ %s %s (as of %s)\n", s.Repo, s.Branch, s.HeadSHA, s.RecordedAt)
+		fmt.Fprintf(&b, "\ntree state: %s @ %s %s (as of %s)\n", s.Repo, branchOrDetached(s.Branch), s.HeadSHA, s.RecordedAt)
 	}
 	if len(v.Comments) > 0 {
 		fmt.Fprintf(&b, "\nComments (%d):\n", len(v.Comments))
@@ -428,4 +428,15 @@ func plural(n int, singular, plural string) string {
 		return singular
 	}
 	return plural
+}
+
+// branchOrDetached names an empty branch rather than leaving a hole in the
+// line. A snapshot taken on a detached HEAD carries no branch, and the head
+// is worth recording anyway (see gitSnapshot) — "repo @  sha" would read as
+// a rendering bug, where "(detached)" reads as the fact it is.
+func branchOrDetached(branch string) string {
+	if strings.TrimSpace(branch) == "" {
+		return "(detached)"
+	}
+	return branch
 }
