@@ -260,19 +260,24 @@ func TestStepStartWithoutHeadSHA(t *testing.T) {
 	}
 }
 
-// TestStepLsRendersPlan exercises `step ls`'s human output: the row for
-// the in-progress step names the SHA its latest mark recorded, so a
-// resuming reader can tell whether their tree matches the plan without a
-// second command.
+// TestStepLsRendersPlan exercises `step ls`'s human output end to end: it
+// reads the issue, not the steps endpoint, and the row for the in-progress
+// step names the SHA its latest mark recorded, so a resuming reader can
+// tell whether their tree matches the plan without a second command.
 func TestStepLsRendersPlan(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet || r.URL.Path != "/api/issues/TSK-1" {
+			t.Fatalf("unexpected %s %s — step ls should GET the issue", r.Method, r.URL.Path)
+		}
 		w.Header().Set("Content-Type", "application/json")
-		fmt.Fprint(w, `[
-			{"id":"s-1","position":1,"title":"read auth.go","status":"done"},
-			{"id":"s-2","position":2,"title":"add cookie fallback","status":"in_progress",
-			 "marks":[{"kind":"start","head_sha":"abc123","actor":"agent","recorded_at":"2026-08-23T00:00:00Z"}]},
-			{"id":"s-3","position":3,"title":"add integration test","status":"pending"}
-		]`)
+		fmt.Fprint(w, `{"id":"i-1","ref":"TSK-1","title":"add cookie fallback",
+			"steps":[
+				{"id":"s-1","position":1,"title":"read auth.go","status":"done"},
+				{"id":"s-2","position":2,"title":"add cookie fallback","status":"in_progress",
+				 "marks":[{"kind":"start","head_sha":"abc123","actor":"agent","recorded_at":"2026-08-23T00:00:00Z"}]},
+				{"id":"s-3","position":3,"title":"add integration test","status":"pending"}
+			],
+			"step_progress":{"done":1,"total":3}}`)
 	}))
 	defer srv.Close()
 
@@ -282,9 +287,64 @@ func TestStepLsRendersPlan(t *testing.T) {
 		t.Fatalf("exit %d, stderr: %s", code, errb.String())
 	}
 	got := out.String()
-	for _, want := range []string{"TSK-1", "1/3 done", "read auth.go", "add cookie fallback", "abc123", "add integration test"} {
+	for _, want := range []string{"TSK-1", "add cookie fallback", "1/3 done", "read auth.go", "abc123", "add integration test"} {
 		if !strings.Contains(got, want) {
 			t.Fatalf("step ls output missing %q:\n%s", want, got)
 		}
+	}
+}
+
+// TestStepLsUsesServerProgress exercises the reason `step ls` reads the
+// issue instead of recomputing a fraction from the rows: the server's
+// step_progress is what prints, even when it disagrees with what a naive
+// count of the rows below it would give — proving the number on screen
+// came off the wire, not out of a second copy of the counting rule here.
+func TestStepLsUsesServerProgress(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		// A naive count of this one "done" row would read 1/1. step_progress
+		// deliberately says otherwise.
+		fmt.Fprint(w, `{"id":"i-1","ref":"TSK-1","title":"ship it",
+			"steps":[{"id":"s-1","position":1,"title":"only step","status":"done"}],
+			"step_progress":{"done":9,"total":10}}`)
+	}))
+	defer srv.Close()
+
+	var out, errb bytes.Buffer
+	env := envAt(map[string]string{"TASKR_API": srv.URL, "TASKR_KEY": "x"})
+	if code := Run([]string{"step", "ls", "TSK-1"}, &out, &errb, env); code != 0 {
+		t.Fatalf("exit %d, stderr: %s", code, errb.String())
+	}
+	got := out.String()
+	if !strings.Contains(got, "9/10 done") {
+		t.Fatalf("want the server's step_progress (9/10) printed, got:\n%s", got)
+	}
+	if strings.Contains(got, "1/1 done") {
+		t.Fatalf("want no locally recomputed fraction, got:\n%s", got)
+	}
+}
+
+// TestStepLsNoSteps exercises an issue with no plan yet: the server omits
+// both steps and step_progress (StepProgress is nil for an empty plan),
+// and `step ls` renders the empty-plan line rather than a bogus fraction
+// or a panic on a nil StepProgress.
+func TestStepLsNoSteps(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		fmt.Fprint(w, `{"id":"i-1","ref":"TSK-1","title":"ship it"}`)
+	}))
+	defer srv.Close()
+
+	var out, errb bytes.Buffer
+	env := envAt(map[string]string{"TASKR_API": srv.URL, "TASKR_KEY": "x"})
+	if code := Run([]string{"step", "ls", "TSK-1"}, &out, &errb, env); code != 0 {
+		t.Fatalf("exit %d, stderr: %s", code, errb.String())
+	}
+	got := out.String()
+	if strings.Contains(got, "done") {
+		t.Fatalf("want no progress fraction for a plan-less issue, got:\n%s", got)
+	}
+	if !strings.Contains(got, "no steps yet") {
+		t.Fatalf("want the empty-plan line, got:\n%s", got)
 	}
 }

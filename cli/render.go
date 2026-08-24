@@ -344,26 +344,6 @@ func stepGlyph(status string) string {
 	}
 }
 
-// stepProgressFraction mirrors internal/app/step.go's own StepProgress
-// rule: a step counts on both sides of the fraction once done, on the
-// total alone while still open (pending or in progress), and on neither
-// side once it has left the plan (dropped, promoted, abandoned) — so a
-// plan that shed steps reads e.g. 2/2 rather than 2/4. Reimplemented here
-// rather than read off the wire because ListSteps returns the steps
-// themselves, not a precomputed summary.
-func stepProgressFraction(steps []StepView) (done, total int) {
-	for _, s := range steps {
-		switch s.Status {
-		case "done":
-			done++
-			total++
-		case "pending", "in_progress":
-			total++
-		}
-	}
-	return done, total
-}
-
 // latestSHA returns the most recent head SHA a step's marks recorded, or
 // "" if none carried one — a mark's snapshot is only ever sent when the
 // caller had a TASKR_HEAD to report.
@@ -403,15 +383,12 @@ func stepNote(s StepView) string {
 	return ""
 }
 
-// RenderSteps renders `taskr step ls`: this is what a person and a cold
-// agent both read to see where the work stands, so the header leads with
-// how much of the plan is done, and every row after it carries the one
-// fact a reader needs to act — the step's position (the shorthand every
-// other step command accepts), its status, its title, and for the step in
-// progress, the SHA it was last marked at.
-func RenderSteps(w io.Writer, ref string, steps []StepView) {
-	done, total := stepProgressFraction(steps)
-	fmt.Fprintf(w, "%s  %d/%d done\n", ref, done, total)
+// renderStepRows writes one line per step — position, status glyph, title,
+// and stepNote's one extra fact — or the empty-plan line when there are
+// none. Shared by RenderSteps (`step ls`, with a progress header ahead of
+// it) and `step drop`'s output (the plan as it stands right after the
+// drop; that response carries no step_progress to head it with).
+func renderStepRows(w io.Writer, steps []StepView) {
 	if len(steps) == 0 {
 		fmt.Fprintln(w, "  no steps yet — `taskr step add` to start the plan")
 		return
@@ -421,6 +398,25 @@ func RenderSteps(w io.Writer, ref string, steps []StepView) {
 		fmt.Fprintf(tw, "  %d\t%s\t%s\t%s\n", s.Position, stepGlyph(s.Status), s.Title, stepNote(s))
 	}
 	tw.Flush()
+}
+
+// RenderSteps renders `taskr step ls`: this is what a person and a cold
+// agent both read to see where the work stands, so the header names the
+// issue and leads with how much of the plan is done — read straight off
+// issue.StepProgress, computed server-side (internal/app/step.go's
+// StepProgress), rather than recomputed here. The counting rule (which
+// statuses count on which side of the fraction) should exist once, on the
+// server; a client-side copy is a client that can silently disagree with
+// it the day that rule changes. StepProgress is nil for an issue with no
+// steps, in which case the header names just the issue and renderStepRows
+// prints the empty-plan line.
+func RenderSteps(w io.Writer, issue IssueView) {
+	fmt.Fprintf(w, "%s — %s", issue.Ref, issue.Title)
+	if p := issue.StepProgress; p != nil {
+		fmt.Fprintf(w, "   %d/%d done", p.Done, p.Total)
+	}
+	fmt.Fprintln(w)
+	renderStepRows(w, issue.Steps)
 }
 
 func indent(s string) string {

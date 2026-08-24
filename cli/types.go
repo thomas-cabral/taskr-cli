@@ -112,6 +112,14 @@ type IssueView struct {
 	Group        *GroupBlock         `json:"group,omitempty"`
 	Parent       *ParentBlock        `json:"parent,omitempty"`
 	Checks       []CheckView         `json:"checks,omitempty"`
+	// Steps is the issue's working plan in order, and StepProgress the
+	// one-line summary of it — both computed server-side (internal/app/
+	// step.go's StepProgress), so `step ls` reads the count from here
+	// rather than re-deriving it: the counting rule (which statuses count
+	// on which side of the fraction) should exist once, not mirrored in
+	// this client and left to drift if the server's ever changes.
+	Steps        []StepView    `json:"steps,omitempty"`
+	StepProgress *StepProgress `json:"step_progress,omitempty"`
 }
 
 // SearchResult is the compact row `ls` renders. It never carries the
@@ -419,6 +427,28 @@ type StepView struct {
 	StartedAt    string     `json:"started_at,omitempty"`
 	EndedAt      string     `json:"ended_at,omitempty"`
 	Marks        []MarkView `json:"marks,omitempty"`
+}
+
+// StepBrief is a step small enough to embed in a summary — StepProgress's
+// Current and Next.
+type StepBrief struct {
+	ID       string `json:"id"`
+	Position int    `json:"position"`
+	Title    string `json:"title"`
+	Status   string `json:"status"`
+}
+
+// StepProgress is the one-line summary of an issue's plan, computed
+// server-side and read off IssueView rather than recomputed here: Total
+// counts steps still part of the plan (done, pending, in progress) —
+// dropped, promoted and abandoned ones leave BOTH sides of the fraction,
+// so a plan that shed steps reads e.g. 2/2 rather than 2/4. Mirrors
+// internal/app/step.go's StepProgress.
+type StepProgress struct {
+	Done    int        `json:"done"`
+	Total   int        `json:"total"`
+	Current *StepBrief `json:"current,omitempty"`
+	Next    *StepBrief `json:"next,omitempty"`
 }
 
 // AddStepsInput is POST /api/issues/{ref}/steps' body. Body is only

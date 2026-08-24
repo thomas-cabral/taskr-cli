@@ -1005,14 +1005,27 @@ func cmdStepLs(ctx context.Context, c *Client, args []string, stdout, stderr io.
 		return fmt.Errorf("usage: taskr step ls <ref> [--json]")
 	}
 	ref := positional[0]
-	steps, err := c.ListSteps(ctx, ref)
+	// Read the issue, not the steps endpoint: GetIssue carries StepProgress
+	// alongside Steps, computed server-side (internal/app/step.go's
+	// StepProgress), so the fraction `step ls` prints is never a second
+	// copy of that counting rule left to drift from the server's own.
+	issue, err := c.GetIssue(ctx, ref, false)
 	if err != nil {
 		return err
 	}
 	if *jsonOut {
+		// The JSON contract stays focused on steps, not the whole issue —
+		// a caller asking for the plan should not have to pick it out of
+		// everything else GetIssue carries. A nil Steps (no steps yet, and
+		// the server omits the key rather than sending an empty array)
+		// still prints as [], matching what ListSteps itself would answer.
+		steps := issue.Steps
+		if steps == nil {
+			steps = []StepView{}
+		}
 		return printJSON(stdout, steps)
 	}
-	RenderSteps(stdout, ref, steps)
+	RenderSteps(stdout, issue)
 	return nil
 }
 
@@ -1241,7 +1254,10 @@ func cmdStepDrop(ctx context.Context, c *Client, args []string, stdout, stderr i
 		return printJSON(stdout, steps)
 	}
 	fmt.Fprintf(stdout, "Dropped %s.\n", stepID)
-	RenderSteps(stdout, ref, steps)
+	// DropStep's response is the plan as it stands, not an IssueView — it
+	// carries no step_progress to head a fraction with, so this prints the
+	// rows alone rather than routing through RenderSteps.
+	renderStepRows(stdout, steps)
 	return nil
 }
 
