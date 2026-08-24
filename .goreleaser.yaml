@@ -21,7 +21,10 @@ builds:
     # own defaults, repeated here because naming ldflags REPLACES the
     # defaults rather than adding to them.
     ldflags:
-      - -s -w -X github.com/thomas-cabral/taskr-cli/cli.version={{.Version}}
+      # {{.Tag}}, not {{.Version}}: goreleaser strips the leading "v" from
+      # Version, so the binary would say "0.7.1" while the tag, the release
+      # page, the install script and every doc say "v0.7.1". One spelling.
+      - -s -w -X github.com/thomas-cabral/taskr-cli/cli.version={{.Tag}}
     goos: [linux, darwin, windows]
     goarch: [amd64, arm64]
     ignore:
