@@ -23,8 +23,11 @@ const stepsJSON = `[
 // a small integer selector is the position `step ls` printed, and
 // resolving it costs one extra read (ListSteps) to find the step id that
 // currently sits there — the write then addresses that id, not the
-// position.
+// position. Run from outside any checkout: the done write now carries a
+// git snapshot envWithRepo would otherwise fill in from whatever repo the
+// test happens to run inside.
 func TestStepDoneResolvesPosition(t *testing.T) {
+	t.Chdir(t.TempDir())
 	var gotMethod, gotPath string
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
@@ -53,8 +56,10 @@ func TestStepDoneResolvesPosition(t *testing.T) {
 // TestStepDoneWithIDSkipsListSteps exercises the other half of the rule: a
 // selector that does not parse as a small positive integer is already a
 // step id, and resolving it costs no read at all — ListSteps must never be
-// called.
+// called. Run from outside any checkout, same reason as
+// TestStepDoneResolvesPosition.
 func TestStepDoneWithIDSkipsListSteps(t *testing.T) {
+	t.Chdir(t.TempDir())
 	listCalled := false
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
@@ -82,8 +87,10 @@ func TestStepDoneWithIDSkipsListSteps(t *testing.T) {
 
 // TestStepPositionOutOfRange exercises the range check: a position with no
 // matching row is an error naming the valid range, and the write is never
-// reached.
+// reached. Run from outside any checkout, same reason as
+// TestStepDoneResolvesPosition.
 func TestStepPositionOutOfRange(t *testing.T) {
+	t.Chdir(t.TempDir())
 	writeCalled := false
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
@@ -213,11 +220,14 @@ func TestStepPromoteNoBlock(t *testing.T) {
 	}
 }
 
-// TestStepStartWithHeadSHA exercises the mark snapshot rule: TASKR_HEAD,
-// when set, becomes the mark's git_snapshot carrying head_sha and nothing
-// else — this client never runs git, so branch and dirty-count are never
-// on the wire at all.
-func TestStepStartWithHeadSHA(t *testing.T) {
+// TestStepStartSendsTheGitSnapshot exercises the mark snapshot rule after
+// TSK-120: a start (or done) mark carries the same tree state new,
+// offload and park do — repo, branch, head, worktree, merge_base and
+// dirty_files — not head_sha alone. snapshotEnv (snapshot_cmd_test.go)
+// sets every TASKR_* variable explicitly, so the body asserted below is
+// not at the mercy of whatever repo happens to be checked out where the
+// test runs.
+func TestStepStartSendsTheGitSnapshot(t *testing.T) {
 	var gotBody string
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		b, _ := io.ReadAll(r.Body)
@@ -228,12 +238,44 @@ func TestStepStartWithHeadSHA(t *testing.T) {
 	defer srv.Close()
 
 	var out, errb bytes.Buffer
-	env := envAt(map[string]string{"TASKR_API": srv.URL, "TASKR_KEY": "x", "TASKR_HEAD": "abc123"})
+	env := envAt(snapshotEnv(srv.URL))
 	if code := Run([]string{"step", "start", "TSK-1", "step-1"}, &out, &errb, env); code != 0 {
 		t.Fatalf("exit %d, stderr: %s", code, errb.String())
 	}
-	if !strings.Contains(gotBody, `"git_snapshot":{"head_sha":"abc123"}`) {
-		t.Fatalf("want git_snapshot with only head_sha, got %s", gotBody)
+	for _, want := range []string{
+		`"repo":"git@github.com:acme/spillway.git"`,
+		`"branch":"fix/bug-sweep"`,
+		`"head_sha":"abc123"`,
+		`"worktree":"/home/tc/spillway/.git/worktrees/billing"`,
+		`"merge_base":"def456"`,
+		`"dirty_files":["cli/cli.go","cli/client.go"]`,
+	} {
+		if !strings.Contains(gotBody, want) {
+			t.Errorf("body is missing %s\ngot %s", want, gotBody)
+		}
+	}
+}
+
+// TestStepDoneSendsTheGitSnapshot pins the same rule on the other mark:
+// done is not a narrower write than start, so it carries the same
+// snapshot shape.
+func TestStepDoneSendsTheGitSnapshot(t *testing.T) {
+	var gotBody string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		b, _ := io.ReadAll(r.Body)
+		gotBody = string(b)
+		w.Header().Set("Content-Type", "application/json")
+		fmt.Fprint(w, `{"status":"done"}`)
+	}))
+	defer srv.Close()
+
+	var out, errb bytes.Buffer
+	env := envAt(snapshotEnv(srv.URL))
+	if code := Run([]string{"step", "done", "TSK-1", "step-1"}, &out, &errb, env); code != 0 {
+		t.Fatalf("exit %d, stderr: %s", code, errb.String())
+	}
+	if !strings.Contains(gotBody, `"branch":"fix/bug-sweep"`) || !strings.Contains(gotBody, `"dirty_files":["cli/cli.go","cli/client.go"]`) {
+		t.Fatalf("want branch and dirty_files on a done mark, got %s", gotBody)
 	}
 }
 
@@ -481,8 +523,10 @@ func TestStepDropWireShape(t *testing.T) {
 // TestStepSessionID exercises the one field every step write is supposed
 // to carry: session_id lands in the request body. Picked on step start,
 // but nothing here is start-specific — the point is that a future change
-// dropping session_id from any one verb would be caught somewhere.
+// dropping session_id from any one verb would be caught somewhere. Run
+// from outside any checkout, same reason as TestStepDoneResolvesPosition.
 func TestStepSessionID(t *testing.T) {
+	t.Chdir(t.TempDir())
 	var gotBody string
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		b, _ := io.ReadAll(r.Body)

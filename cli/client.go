@@ -383,6 +383,27 @@ func (c *Client) RemoveChild(ctx context.Context, parent, child string) error {
 		"/api/issues/"+url.PathEscape(parent)+"/children/"+url.PathEscape(child), struct{}{}, nil)
 }
 
+// RelateInput is the wire shape POST /api/issues/{ref}/relate accepts.
+// Remove turns the same endpoint into a delete — taskr unrelate sends
+// Remove: true rather than hitting a second path — so it carries no
+// omitempty: false is relate's own meaningful value, not a zero one to
+// hide.
+type RelateInput struct {
+	To        string `json:"to"`
+	Type      string `json:"type"`
+	Remove    bool   `json:"remove"`
+	SessionID string `json:"session_id,omitempty"`
+}
+
+// RelateIssues writes or removes a directed relationship between two
+// issues, answering 204. PARENT_OF and CHILD_OF are refused by the
+// aggregate — group membership is `taskr group add`/`rm`'s job, not
+// relate's — so a caller should reject those locally before this ever
+// runs; see validateRelType.
+func (c *Client) RelateIssues(ctx context.Context, ref string, in RelateInput) error {
+	return c.write(ctx, http.MethodPost, "/api/issues/"+url.PathEscape(ref)+"/relate", in, nil)
+}
+
 func (c *Client) AddComment(ctx context.Context, ref, body string) error {
 	req := struct {
 		Body string `json:"body"`
