@@ -14,6 +14,14 @@ builds:
       - CGO_ENABLED=0
     flags:
       - -trimpath
+    # Spelled out because goreleaser's default ldflags inject main.version,
+    # and every line of version code lives in package cli — so the release
+    # number was being linked into a symbol nothing reads, and `taskr
+    # version` could not answer which release it was. -s -w are goreleaser's
+    # own defaults, repeated here because naming ldflags REPLACES the
+    # defaults rather than adding to them.
+    ldflags:
+      - -s -w -X github.com/thomas-cabral/taskr-cli/cli.version={{.Version}}
     goos: [linux, darwin, windows]
     goarch: [amd64, arm64]
     ignore:

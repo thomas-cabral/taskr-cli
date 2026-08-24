@@ -22,11 +22,17 @@ import (
 // which reads as "cannot tell", never as "current".
 type buildStamp struct {
 	Module    string
+	Version   string
 	Revision  string
 	Time      string
 	Dirty     bool
 	GoVersion string
 }
+
+// version is the release this binary was cut as, injected at link time by
+// goreleaser (.goreleaser.yaml sets -X on this symbol). It is empty for
+// every other way of building, and readBuildStamp falls back accordingly.
+var version string
 
 // readBuildStamp pulls the stamp out of the running binary. It is a var so
 // tests can say what the stamp is: a `go test` binary carries no VCS stamp
@@ -37,7 +43,20 @@ var readBuildStamp = func() buildStamp {
 	if !ok {
 		return buildStamp{}
 	}
-	s := buildStamp{Module: info.Main.Path, GoVersion: info.GoVersion}
+	// Three ways a binary can know its release, in descending trust:
+	// linked in by goreleaser, stamped by `go install module@version`, or
+	// not at all. The third is a hand-built binary, and it prints no
+	// version rather than an invented one — the revision and checkout
+	// lines below already tell that story honestly, and a fake release
+	// number would ruin the one question this command exists to answer.
+	//
+	// "(devel)" is what the go tool reports for a build from a work tree
+	// rather than a module download, which is not a version.
+	release := version
+	if release == "" && info.Main.Version != "" && info.Main.Version != "(devel)" {
+		release = info.Main.Version
+	}
+	s := buildStamp{Module: info.Main.Path, Version: release, GoVersion: info.GoVersion}
 	for _, kv := range info.Settings {
 		switch kv.Key {
 		case "vcs.revision":
@@ -150,6 +169,7 @@ func stalenessFor(getenv func(string) string) string {
 // back where it started.
 type versionView struct {
 	Module           string `json:"module"`
+	Version          string `json:"version,omitempty"`
 	Revision         string `json:"revision,omitempty"`
 	Time             string `json:"time,omitempty"`
 	Dirty            bool   `json:"dirty"`
@@ -178,13 +198,18 @@ func cmdVersion(args []string, stdout, stderr io.Writer, getenv func(string) str
 
 	if *jsonOut {
 		return printJSON(stdout, versionView{
-			Module: s.Module, Revision: s.Revision, Time: s.Time, Dirty: s.Dirty,
+			Module: s.Module, Version: s.Version,
+			Revision: s.Revision, Time: s.Time, Dirty: s.Dirty,
 			GoVersion: s.GoVersion, CheckoutRevision: head,
 			Stale: warning != "", Warning: warning,
 		})
 	}
 
-	fmt.Fprintf(stdout, "taskr %s\n", s.Module)
+	if s.Version != "" {
+		fmt.Fprintf(stdout, "taskr %s %s\n", s.Version, s.Module)
+	} else {
+		fmt.Fprintf(stdout, "taskr %s\n", s.Module)
+	}
 	if s.Revision == "" {
 		// Not an error, but not nothing either: an unstamped binary can
 		// never be compared to a checkout, and saying so beats printing a

@@ -103,6 +103,59 @@ func TestVersionJSONCarriesTheStamp(t *testing.T) {
 	}
 }
 
+func TestVersionNamesTheReleaseWhenItKnowsIt(t *testing.T) {
+	withStamp(t, buildStamp{
+		Module: mod, Version: "v0.7.0", Revision: built,
+		Time: "2026-08-24T15:30:18Z", GoVersion: "go1.26.5",
+	})
+	var out, errb bytes.Buffer
+	if code := Run([]string{"version"}, &out, &errb, envAt(map[string]string{})); code != 0 {
+		t.Fatalf("exit %d, stderr: %s", code, errb.String())
+	}
+	// The release leads the line: it is the question the command is asked,
+	// and a reader should not have to compare a commit against a tag list
+	// to answer it.
+	if got := out.String(); !strings.Contains(got, "taskr v0.7.0 "+mod) {
+		t.Fatalf("version output does not lead with the release:\n%s", got)
+	}
+}
+
+func TestVersionOmitsTheReleaseRatherThanInventingOne(t *testing.T) {
+	withStamp(t, buildStamp{Module: mod, Revision: built, GoVersion: "go1.26.5"})
+	var out, errb bytes.Buffer
+	if code := Run([]string{"version"}, &out, &errb, envAt(map[string]string{})); code != 0 {
+		t.Fatalf("exit %d, stderr: %s", code, errb.String())
+	}
+	// A binary with no release is one built by hand. It says so by omission
+	// and lets the revision and checkout lines carry the provenance;
+	// printing a placeholder where a release number goes would make this
+	// command worse at the one question it exists to answer.
+	got := out.String()
+	if !strings.HasPrefix(got, "taskr "+mod) {
+		t.Fatalf("unstamped binary should print the module alone:\n%s", got)
+	}
+	if strings.Contains(got, "devel") || strings.Contains(got, "unknown") {
+		t.Fatalf("version invented a release for an unstamped binary:\n%s", got)
+	}
+}
+
+func TestVersionJSONCarriesTheRelease(t *testing.T) {
+	withStamp(t, buildStamp{Module: mod, Version: "v0.7.0", Revision: built})
+	var out, errb bytes.Buffer
+	if code := Run([]string{"version", "--json"}, &out, &errb, envAt(map[string]string{})); code != 0 {
+		t.Fatalf("exit %d, stderr: %s", code, errb.String())
+	}
+	var v struct {
+		Version string `json:"version"`
+	}
+	if err := json.Unmarshal(out.Bytes(), &v); err != nil {
+		t.Fatalf("unmarshal %q: %v", out.String(), err)
+	}
+	if v.Version != "v0.7.0" {
+		t.Fatalf("version = %q, want v0.7.0", v.Version)
+	}
+}
+
 // The orientation command is where an agent starts a session, and so the
 // one place a stale binary has to announce itself unasked.
 func TestContextWarnsAboutAStaleBinary(t *testing.T) {
