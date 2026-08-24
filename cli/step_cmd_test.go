@@ -23,8 +23,11 @@ const stepsJSON = `[
 // a small integer selector is the position `step ls` printed, and
 // resolving it costs one extra read (ListSteps) to find the step id that
 // currently sits there — the write then addresses that id, not the
-// position.
+// position. Run from outside any checkout: the done write now carries a
+// git snapshot envWithRepo would otherwise fill in from whatever repo the
+// test happens to run inside.
 func TestStepDoneResolvesPosition(t *testing.T) {
+	t.Chdir(t.TempDir())
 	var gotMethod, gotPath string
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
@@ -53,8 +56,10 @@ func TestStepDoneResolvesPosition(t *testing.T) {
 // TestStepDoneWithIDSkipsListSteps exercises the other half of the rule: a
 // selector that does not parse as a small positive integer is already a
 // step id, and resolving it costs no read at all — ListSteps must never be
-// called.
+// called. Run from outside any checkout, same reason as
+// TestStepDoneResolvesPosition.
 func TestStepDoneWithIDSkipsListSteps(t *testing.T) {
+	t.Chdir(t.TempDir())
 	listCalled := false
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
@@ -82,8 +87,10 @@ func TestStepDoneWithIDSkipsListSteps(t *testing.T) {
 
 // TestStepPositionOutOfRange exercises the range check: a position with no
 // matching row is an error naming the valid range, and the write is never
-// reached.
+// reached. Run from outside any checkout, same reason as
+// TestStepDoneResolvesPosition.
 func TestStepPositionOutOfRange(t *testing.T) {
+	t.Chdir(t.TempDir())
 	writeCalled := false
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
@@ -516,8 +523,10 @@ func TestStepDropWireShape(t *testing.T) {
 // TestStepSessionID exercises the one field every step write is supposed
 // to carry: session_id lands in the request body. Picked on step start,
 // but nothing here is start-specific — the point is that a future change
-// dropping session_id from any one verb would be caught somewhere.
+// dropping session_id from any one verb would be caught somewhere. Run
+// from outside any checkout, same reason as TestStepDoneResolvesPosition.
 func TestStepSessionID(t *testing.T) {
+	t.Chdir(t.TempDir())
 	var gotBody string
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		b, _ := io.ReadAll(r.Body)
