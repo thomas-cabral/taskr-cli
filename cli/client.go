@@ -569,13 +569,23 @@ func (c *Client) SubmitTriage(ctx context.Context, ref string, in SubmitTriageIn
 // --- Projects ---
 
 // SetupProjectInput is the wire shape POST /api/projects accepts. `project
-// init` never sends Repos or Conventions — attaching a repo or a directory
-// is `project attach`'s job, kept as its own step so a caller onboarding a
-// second directory never has to repeat the project's key.
+// init` never sends Repos — attaching a repo or a directory is `project
+// attach`'s job, kept as its own step so a caller onboarding a second
+// directory never has to repeat the project's key.
+//
+// Conventions ride here rather than on AttachRepoInput because this is the
+// only endpoint that takes them: POST /api/projects/{slug}/repos decodes
+// remote_url, default_branch, local_path, machine and subpath, and nothing
+// else. Sending them is safe on an existing project — SetupProject upserts
+// on slug and refreshes a convention only when the incoming value is
+// non-empty — so `project init` doubles as the way to set them later
+// (TSK-111). Nil when the caller named none, so an init that says nothing
+// about conventions cannot be read as saying anything.
 type SetupProjectInput struct {
-	Slug string `json:"slug"`
-	Name string `json:"name,omitempty"`
-	Key  string `json:"key"`
+	Slug        string              `json:"slug"`
+	Name        string              `json:"name,omitempty"`
+	Key         string              `json:"key"`
+	Conventions *ProjectConventions `json:"conventions,omitempty"`
 }
 
 // SetupProjectResult is what `project init` needs back: enough to confirm

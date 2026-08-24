@@ -55,6 +55,7 @@ Usage:
   taskr version                          which commit this binary was built from
   taskr project ls                       every registered project, with its repos and dirs
   taskr project init <slug> --key KEY [--name N]
+                            [--branch-format F] [--commit-style S] [--pr-target BRANCH]
   taskr project attach [--project S] [--repo URL] [--dir SUBPATH]
   taskr project rename <slug> <new-slug> [--name N]
 

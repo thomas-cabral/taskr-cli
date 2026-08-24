@@ -179,6 +179,9 @@ func RenderContext(v ContextView, actor string) string {
 
 	if v.Project != nil {
 		fmt.Fprintf(&b, "\nProject: %s (%s)\n", v.Project.Name, v.Project.Slug)
+		// Orientation is where an agent decides what to branch from and
+		// where to send the PR, and this is the only place that knows.
+		renderConventions(&b, "  ", v.Project.Conventions)
 	} else if v.SetupHint != nil {
 		fmt.Fprintf(&b, "\n%s\n", v.SetupHint.Reason)
 		for _, c := range v.SetupHint.Collect {
@@ -316,6 +319,23 @@ func RenderProjects(w io.Writer, rows []ProjectView) {
 		}
 		for _, d := range v.Dirs {
 			fmt.Fprintf(w, "  dir   %s  (%s)\n", d.Subpath, d.RemoteURL)
+		}
+		renderConventions(w, "  ", v.Conventions)
+	}
+}
+
+// renderConventions prints the conventions a project has actually recorded
+// and nothing for the ones it has not. An unset convention is not "empty",
+// it is unanswered, and printing "pr target:" with nothing after it invites
+// an agent to treat the blank as the answer (TSK-111).
+func renderConventions(w io.Writer, indent string, c ProjectConventions) {
+	for _, row := range []struct{ label, value string }{
+		{"branch", c.BranchFormat},
+		{"commit", c.CommitStyle},
+		{"pr into", c.PRTarget},
+	} {
+		if strings.TrimSpace(row.value) != "" {
+			fmt.Fprintf(w, "%s%-7s %s\n", indent, row.label, row.value)
 		}
 	}
 }

@@ -77,8 +77,15 @@ taskr doc <ref>
 taskr auth login               # reads the key from stdin, never argv
 taskr auth status
 taskr version
-taskr project ls
+taskr project ls               # projects, their repos, dirs and conventions
+taskr project init <slug> --key KEY [--branch-format F] [--pr-target BRANCH]
 ```
+
+A project's conventions — the branch-name shape, the commit style, the
+branch PRs are opened against — are printed by `project ls` and by `taskr
+context` beside the project it resolved, so an agent reads them instead of
+guessing. `project init` sets them, on a new project or an existing one; a
+convention you do not name is left exactly as it was.
 
 Every command accepts `--json` for machine-readable output; the default is
 human-readable prose, which matters most for `taskr start` — the resume
