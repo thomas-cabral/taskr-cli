@@ -320,6 +320,109 @@ func RenderProjects(w io.Writer, rows []ProjectView) {
 	}
 }
 
+// stepGlyph is the one-character status vocabulary `step ls` prints per
+// row. The codebase's one existing glyph pair — ○/✓ on a group walk — is a
+// binary open/closed view and does not stretch to a step's six statuses,
+// so this defines its own rather than force-fitting that one. Plain ASCII,
+// not Unicode, so a plain terminal or a log file renders it the same way.
+func stepGlyph(status string) string {
+	switch status {
+	case "pending":
+		return "."
+	case "in_progress":
+		return ">"
+	case "done":
+		return "x"
+	case "dropped":
+		return "~"
+	case "promoted":
+		return "^"
+	case "abandoned":
+		return "-"
+	default:
+		return "?"
+	}
+}
+
+// stepProgressFraction mirrors internal/app/step.go's own StepProgress
+// rule: a step counts on both sides of the fraction once done, on the
+// total alone while still open (pending or in progress), and on neither
+// side once it has left the plan (dropped, promoted, abandoned) — so a
+// plan that shed steps reads e.g. 2/2 rather than 2/4. Reimplemented here
+// rather than read off the wire because ListSteps returns the steps
+// themselves, not a precomputed summary.
+func stepProgressFraction(steps []StepView) (done, total int) {
+	for _, s := range steps {
+		switch s.Status {
+		case "done":
+			done++
+			total++
+		case "pending", "in_progress":
+			total++
+		}
+	}
+	return done, total
+}
+
+// latestSHA returns the most recent head SHA a step's marks recorded, or
+// "" if none carried one — a mark's snapshot is only ever sent when the
+// caller had a TASKR_HEAD to report.
+func latestSHA(marks []MarkView) string {
+	for i := len(marks) - 1; i >= 0; i-- {
+		if marks[i].HeadSHA != "" {
+			return marks[i].HeadSHA
+		}
+	}
+	return ""
+}
+
+// stepNote is the one extra fact worth a column of its own: the SHA a step
+// in progress was last marked at, or what a step that left the plan became
+// or why. Every other status has nothing more to say.
+func stepNote(s StepView) string {
+	switch s.Status {
+	case "in_progress":
+		if sha := latestSHA(s.Marks); sha != "" {
+			return "since " + sha
+		}
+	case "dropped":
+		if s.DropReason != "" {
+			return "dropped: " + s.DropReason
+		}
+		return "dropped"
+	case "promoted":
+		ref := s.PromotedRef
+		if ref == "" {
+			ref = s.PromotedTo
+		}
+		if ref != "" {
+			return "promoted -> " + ref
+		}
+		return "promoted"
+	}
+	return ""
+}
+
+// RenderSteps renders `taskr step ls`: this is what a person and a cold
+// agent both read to see where the work stands, so the header leads with
+// how much of the plan is done, and every row after it carries the one
+// fact a reader needs to act — the step's position (the shorthand every
+// other step command accepts), its status, its title, and for the step in
+// progress, the SHA it was last marked at.
+func RenderSteps(w io.Writer, ref string, steps []StepView) {
+	done, total := stepProgressFraction(steps)
+	fmt.Fprintf(w, "%s  %d/%d done\n", ref, done, total)
+	if len(steps) == 0 {
+		fmt.Fprintln(w, "  no steps yet — `taskr step add` to start the plan")
+		return
+	}
+	tw := tabwriter.NewWriter(w, 0, 2, 2, ' ', 0)
+	for _, s := range steps {
+		fmt.Fprintf(tw, "  %d\t%s\t%s\t%s\n", s.Position, stepGlyph(s.Status), s.Title, stepNote(s))
+	}
+	tw.Flush()
+}
+
 func indent(s string) string {
 	return strings.ReplaceAll(strings.TrimSpace(s), "\n", "\n  ")
 }

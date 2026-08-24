@@ -1,0 +1,290 @@
+// cli/step_cmd_test.go
+package cli
+
+import (
+	"bytes"
+	"fmt"
+	"io"
+	"net/http"
+	"net/http/httptest"
+	"strings"
+	"testing"
+)
+
+// stepsJSON is the plan `ListSteps` decodes for TSK-1 across the tests
+// below: two ordinary steps, at positions 1 and 2, to resolve a position
+// selector against.
+const stepsJSON = `[
+	{"id":"s-1","position":1,"title":"read auth.go","status":"done"},
+	{"id":"s-2","position":2,"title":"add cookie fallback","status":"in_progress"}
+]`
+
+// TestStepDoneResolvesPosition exercises the settled position-or-id rule:
+// a small integer selector is the position `step ls` printed, and
+// resolving it costs one extra read (ListSteps) to find the step id that
+// currently sits there — the write then addresses that id, not the
+// position.
+func TestStepDoneResolvesPosition(t *testing.T) {
+	var gotMethod, gotPath string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		switch {
+		case r.Method == http.MethodGet && r.URL.Path == "/api/issues/TSK-1/steps":
+			fmt.Fprint(w, stepsJSON)
+		case r.Method == http.MethodPost && r.URL.Path == "/api/steps/s-2/done":
+			gotMethod, gotPath = r.Method, r.URL.Path
+			fmt.Fprint(w, `{"status":"done"}`)
+		default:
+			t.Fatalf("unexpected %s %s", r.Method, r.URL.Path)
+		}
+	}))
+	defer srv.Close()
+
+	var out, errb bytes.Buffer
+	env := envAt(map[string]string{"TASKR_API": srv.URL, "TASKR_KEY": "x"})
+	if code := Run([]string{"step", "done", "TSK-1", "2"}, &out, &errb, env); code != 0 {
+		t.Fatalf("exit %d, stderr: %s", code, errb.String())
+	}
+	if gotMethod != http.MethodPost || gotPath != "/api/steps/s-2/done" {
+		t.Fatalf("want POST /api/steps/s-2/done, got %s %s", gotMethod, gotPath)
+	}
+}
+
+// TestStepDoneWithIDSkipsListSteps exercises the other half of the rule: a
+// selector that does not parse as a small positive integer is already a
+// step id, and resolving it costs no read at all — ListSteps must never be
+// called.
+func TestStepDoneWithIDSkipsListSteps(t *testing.T) {
+	listCalled := false
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		switch {
+		case r.URL.Path == "/api/issues/TSK-1/steps":
+			listCalled = true
+			fmt.Fprint(w, stepsJSON)
+		case r.Method == http.MethodPost && r.URL.Path == "/api/steps/step-xyz/done":
+			fmt.Fprint(w, `{"status":"done"}`)
+		default:
+			t.Fatalf("unexpected %s %s", r.Method, r.URL.Path)
+		}
+	}))
+	defer srv.Close()
+
+	var out, errb bytes.Buffer
+	env := envAt(map[string]string{"TASKR_API": srv.URL, "TASKR_KEY": "x"})
+	if code := Run([]string{"step", "done", "TSK-1", "step-xyz"}, &out, &errb, env); code != 0 {
+		t.Fatalf("exit %d, stderr: %s", code, errb.String())
+	}
+	if listCalled {
+		t.Fatal("want no ListSteps call when the selector is already a step id")
+	}
+}
+
+// TestStepPositionOutOfRange exercises the range check: a position with no
+// matching row is an error naming the valid range, and the write is never
+// reached.
+func TestStepPositionOutOfRange(t *testing.T) {
+	writeCalled := false
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		switch {
+		case r.Method == http.MethodGet && r.URL.Path == "/api/issues/TSK-1/steps":
+			fmt.Fprint(w, stepsJSON)
+		default:
+			writeCalled = true
+			t.Fatalf("unexpected %s %s — the write must not be reached", r.Method, r.URL.Path)
+		}
+	}))
+	defer srv.Close()
+
+	var out, errb bytes.Buffer
+	env := envAt(map[string]string{"TASKR_API": srv.URL, "TASKR_KEY": "x"})
+	code := Run([]string{"step", "done", "TSK-1", "5"}, &out, &errb, env)
+	if code == 0 {
+		t.Fatalf("want non-zero exit for an out-of-range position, got 0")
+	}
+	if writeCalled {
+		t.Fatal("want no write for an out-of-range position")
+	}
+	if !strings.Contains(errb.String(), "1-2") {
+		t.Fatalf("want the valid range named in the error, got: %s", errb.String())
+	}
+}
+
+// TestStepAddSendsTitlesArray exercises `step add` with several titles:
+// they land on the wire as one titles array in one request, not one call
+// per title.
+func TestStepAddSendsTitlesArray(t *testing.T) {
+	var gotBody string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		b, _ := io.ReadAll(r.Body)
+		gotBody = string(b)
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusCreated)
+		fmt.Fprint(w, `[{"id":"s-1","issue":{"id":"i-1","ref":"TSK-1"}},{"id":"s-2","issue":{"id":"i-1","ref":"TSK-1"}}]`)
+	}))
+	defer srv.Close()
+
+	var out, errb bytes.Buffer
+	env := envAt(map[string]string{"TASKR_API": srv.URL, "TASKR_KEY": "x"})
+	args := []string{"step", "add", "TSK-1", "read auth.go", "add cookie fallback"}
+	if code := Run(args, &out, &errb, env); code != 0 {
+		t.Fatalf("exit %d, stderr: %s", code, errb.String())
+	}
+	if !strings.Contains(gotBody, `"titles":["read auth.go","add cookie fallback"]`) {
+		t.Fatalf("want both titles in one titles array, got %s", gotBody)
+	}
+}
+
+// TestStepMvFront exercises `step mv --front`: it sends an empty after —
+// the wire spelling for "move to the front of the plan".
+func TestStepMvFront(t *testing.T) {
+	var gotBody string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodPut && r.URL.Path == "/api/steps/step-1/position" {
+			b, _ := io.ReadAll(r.Body)
+			gotBody = string(b)
+			w.WriteHeader(http.StatusNoContent)
+			return
+		}
+		t.Fatalf("unexpected %s %s", r.Method, r.URL.Path)
+	}))
+	defer srv.Close()
+
+	var out, errb bytes.Buffer
+	env := envAt(map[string]string{"TASKR_API": srv.URL, "TASKR_KEY": "x"})
+	args := []string{"step", "mv", "TSK-1", "step-1", "--front"}
+	if code := Run(args, &out, &errb, env); code != 0 {
+		t.Fatalf("exit %d, stderr: %s", code, errb.String())
+	}
+	if !strings.Contains(gotBody, `"after":""`) {
+		t.Fatalf("want an empty after in the request body, got %s", gotBody)
+	}
+}
+
+// TestStepPromoteDefaults exercises `step promote`'s defaults: became
+// defaults to "issue", and block is omitted from the wire entirely so the
+// server's own default (true, for a child issue) applies.
+func TestStepPromoteDefaults(t *testing.T) {
+	var gotBody string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		b, _ := io.ReadAll(r.Body)
+		gotBody = string(b)
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusCreated)
+		fmt.Fprint(w, `{"step_id":"step-1","became":"issue","target_id":"i-2","target_ref":"TSK-2","blocked":true}`)
+	}))
+	defer srv.Close()
+
+	var out, errb bytes.Buffer
+	env := envAt(map[string]string{"TASKR_API": srv.URL, "TASKR_KEY": "x"})
+	if code := Run([]string{"step", "promote", "TSK-1", "step-1"}, &out, &errb, env); code != 0 {
+		t.Fatalf("exit %d, stderr: %s", code, errb.String())
+	}
+	if !strings.Contains(gotBody, `"became":"issue"`) {
+		t.Fatalf("want became:issue in the request body, got %s", gotBody)
+	}
+	if strings.Contains(gotBody, `"block"`) {
+		t.Fatalf("want block omitted so the server default applies, got %s", gotBody)
+	}
+}
+
+// TestStepPromoteNoBlock exercises --no-block: it sends block:false rather
+// than omitting the field.
+func TestStepPromoteNoBlock(t *testing.T) {
+	var gotBody string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		b, _ := io.ReadAll(r.Body)
+		gotBody = string(b)
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusCreated)
+		fmt.Fprint(w, `{"step_id":"step-1","became":"issue","target_id":"i-2","target_ref":"TSK-2","blocked":false}`)
+	}))
+	defer srv.Close()
+
+	var out, errb bytes.Buffer
+	env := envAt(map[string]string{"TASKR_API": srv.URL, "TASKR_KEY": "x"})
+	args := []string{"step", "promote", "TSK-1", "step-1", "--no-block"}
+	if code := Run(args, &out, &errb, env); code != 0 {
+		t.Fatalf("exit %d, stderr: %s", code, errb.String())
+	}
+	if !strings.Contains(gotBody, `"block":false`) {
+		t.Fatalf("want block:false in the request body, got %s", gotBody)
+	}
+}
+
+// TestStepStartWithHeadSHA exercises the mark snapshot rule: TASKR_HEAD,
+// when set, becomes the mark's git_snapshot carrying head_sha and nothing
+// else — this client never runs git, so branch and dirty-count are never
+// on the wire at all.
+func TestStepStartWithHeadSHA(t *testing.T) {
+	var gotBody string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		b, _ := io.ReadAll(r.Body)
+		gotBody = string(b)
+		w.Header().Set("Content-Type", "application/json")
+		fmt.Fprint(w, `{"status":"in_progress"}`)
+	}))
+	defer srv.Close()
+
+	var out, errb bytes.Buffer
+	env := envAt(map[string]string{"TASKR_API": srv.URL, "TASKR_KEY": "x", "TASKR_HEAD": "abc123"})
+	if code := Run([]string{"step", "start", "TSK-1", "step-1"}, &out, &errb, env); code != 0 {
+		t.Fatalf("exit %d, stderr: %s", code, errb.String())
+	}
+	if !strings.Contains(gotBody, `"git_snapshot":{"head_sha":"abc123"}`) {
+		t.Fatalf("want git_snapshot with only head_sha, got %s", gotBody)
+	}
+}
+
+// TestStepStartWithoutHeadSHA exercises the other half: with no
+// TASKR_HEAD, the snapshot is omitted from the wire entirely, not sent
+// empty.
+func TestStepStartWithoutHeadSHA(t *testing.T) {
+	var gotBody string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		b, _ := io.ReadAll(r.Body)
+		gotBody = string(b)
+		w.Header().Set("Content-Type", "application/json")
+		fmt.Fprint(w, `{"status":"in_progress"}`)
+	}))
+	defer srv.Close()
+
+	var out, errb bytes.Buffer
+	env := envAt(map[string]string{"TASKR_API": srv.URL, "TASKR_KEY": "x"})
+	if code := Run([]string{"step", "start", "TSK-1", "step-1"}, &out, &errb, env); code != 0 {
+		t.Fatalf("exit %d, stderr: %s", code, errb.String())
+	}
+	if strings.Contains(gotBody, "git_snapshot") {
+		t.Fatalf("want no git_snapshot at all when TASKR_HEAD is unset, got %s", gotBody)
+	}
+}
+
+// TestStepLsRendersPlan exercises `step ls`'s human output: the row for
+// the in-progress step names the SHA its latest mark recorded, so a
+// resuming reader can tell whether their tree matches the plan without a
+// second command.
+func TestStepLsRendersPlan(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		fmt.Fprint(w, `[
+			{"id":"s-1","position":1,"title":"read auth.go","status":"done"},
+			{"id":"s-2","position":2,"title":"add cookie fallback","status":"in_progress",
+			 "marks":[{"kind":"start","head_sha":"abc123","actor":"agent","recorded_at":"2026-08-23T00:00:00Z"}]},
+			{"id":"s-3","position":3,"title":"add integration test","status":"pending"}
+		]`)
+	}))
+	defer srv.Close()
+
+	var out, errb bytes.Buffer
+	env := envAt(map[string]string{"TASKR_API": srv.URL, "TASKR_KEY": "x"})
+	if code := Run([]string{"step", "ls", "TSK-1"}, &out, &errb, env); code != 0 {
+		t.Fatalf("exit %d, stderr: %s", code, errb.String())
+	}
+	got := out.String()
+	for _, want := range []string{"TSK-1", "1/3 done", "read auth.go", "add cookie fallback", "abc123", "add integration test"} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("step ls output missing %q:\n%s", want, got)
+		}
+	}
+}

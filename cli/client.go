@@ -473,6 +473,62 @@ func (c *Client) PendingChecks(ctx context.Context, runner string, loc Locator, 
 	return out, err
 }
 
+// --- Steps (TSK-105) ---
+
+// ListSteps reads an issue's ordered working plan.
+func (c *Client) ListSteps(ctx context.Context, ref string) ([]StepView, error) {
+	var out []StepView
+	err := c.get(ctx, "/api/issues/"+url.PathEscape(ref)+"/steps", nil, &out)
+	return out, err
+}
+
+// AddSteps records one or more steps on an issue's plan, in the order given.
+func (c *Client) AddSteps(ctx context.Context, ref string, in AddStepsInput) ([]StepRef, error) {
+	var out []StepRef
+	err := c.write(ctx, http.MethodPost, "/api/issues/"+url.PathEscape(ref)+"/steps", in, &out)
+	return out, err
+}
+
+// EditStep revises a step's title and/or body.
+func (c *Client) EditStep(ctx context.Context, stepID string, in EditStepInput) error {
+	return c.write(ctx, http.MethodPatch, "/api/steps/"+url.PathEscape(stepID), in, nil)
+}
+
+// MoveStep relocates a step within its plan. An empty After moves it to
+// the front.
+func (c *Client) MoveStep(ctx context.Context, stepID string, in MoveStepInput) error {
+	return c.write(ctx, http.MethodPut, "/api/steps/"+url.PathEscape(stepID)+"/position", in, nil)
+}
+
+// StartStep marks a step in progress.
+func (c *Client) StartStep(ctx context.Context, stepID string, in StepMarkInput) (StepStatusResult, error) {
+	var out StepStatusResult
+	err := c.write(ctx, http.MethodPost, "/api/steps/"+url.PathEscape(stepID)+"/start", in, &out)
+	return out, err
+}
+
+// DoneStep marks a step done.
+func (c *Client) DoneStep(ctx context.Context, stepID string, in StepMarkInput) (StepStatusResult, error) {
+	var out StepStatusResult
+	err := c.write(ctx, http.MethodPost, "/api/steps/"+url.PathEscape(stepID)+"/done", in, &out)
+	return out, err
+}
+
+// DropStep takes a step off the plan and returns the plan as it stands, so
+// a caller can re-render without a second request.
+func (c *Client) DropStep(ctx context.Context, stepID string, in DropStepInput) ([]StepView, error) {
+	var out []StepView
+	err := c.write(ctx, http.MethodPost, "/api/steps/"+url.PathEscape(stepID)+"/drop", in, &out)
+	return out, err
+}
+
+// PromoteStep turns a step into a child issue or a check.
+func (c *Client) PromoteStep(ctx context.Context, stepID string, in PromoteStepInput) (PromoteResult, error) {
+	var out PromoteResult
+	err := c.write(ctx, http.MethodPost, "/api/steps/"+url.PathEscape(stepID)+"/promote", in, &out)
+	return out, err
+}
+
 // SubmitTriageInput is the wire shape POST /api/triage/{ref} accepts.
 type SubmitTriageInput struct {
 	Verdict     string `json:"verdict"`
