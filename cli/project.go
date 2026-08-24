@@ -61,16 +61,23 @@ func projectInit(ctx context.Context, c *Client, args []string, stdout, stderr i
 	fs.SetOutput(stderr)
 	key := fs.String("key", "", "issue ref prefix, e.g. TSK; required the first time a project is created")
 	name := fs.String("name", "", "display name; defaults to the slug")
+	branchFormat := fs.String("branch-format", "", "branch name shape, e.g. tc/{key}-{n}--{slug}")
+	commitStyle := fs.String("commit-style", "", "commit message style, e.g. conventional")
+	prTarget := fs.String("pr-target", "", "branch PRs are opened against, e.g. master")
 	jsonOut := fs.Bool("json", false, "output JSON")
 	positional, err := parseFlags(fs, args)
 	if err != nil {
 		return err
 	}
 	if len(positional) < 1 {
-		return fmt.Errorf("usage: taskr project init <slug> --key KEY [--name N]")
+		return fmt.Errorf("usage: taskr project init <slug> --key KEY [--name N] " +
+			"[--branch-format F] [--commit-style S] [--pr-target BRANCH]")
 	}
 
-	res, err := c.SetupProject(ctx, SetupProjectInput{Slug: positional[0], Key: *key, Name: *name})
+	res, err := c.SetupProject(ctx, SetupProjectInput{
+		Slug: positional[0], Key: *key, Name: *name,
+		Conventions: conventionsFrom(*branchFormat, *commitStyle, *prTarget),
+	})
 	if err != nil {
 		return err
 	}
@@ -79,6 +86,23 @@ func projectInit(ctx context.Context, c *Client, args []string, stdout, stderr i
 	}
 	fmt.Fprintf(stdout, "Initialized %s (%s).\n", positional[0], res.Key)
 	return nil
+}
+
+// conventionsFrom returns nil when the caller named no convention at all,
+// so `project init` on an existing project stays a no-op on them. Sending
+// an empty block would be harmless against today's server — its upsert
+// skips empty values — but nil is what makes that independent of a rule
+// living in another repo.
+func conventionsFrom(branchFormat, commitStyle, prTarget string) *ProjectConventions {
+	c := ProjectConventions{
+		BranchFormat: strings.TrimSpace(branchFormat),
+		CommitStyle:  strings.TrimSpace(commitStyle),
+		PRTarget:     strings.TrimSpace(prTarget),
+	}
+	if c == (ProjectConventions{}) {
+		return nil
+	}
+	return &c
 }
 
 // projectAttach defaults its project to whatever the caller's locator

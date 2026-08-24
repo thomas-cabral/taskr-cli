@@ -38,7 +38,7 @@ func RenderResumePacket(p ResumePacket) string {
 	if iv.Snapshot != nil {
 		s := iv.Snapshot
 		fmt.Fprintf(&b, "Tree state (as of %s):\n", s.RecordedAt)
-		fmt.Fprintf(&b, "  %s @ %s  %s\n", s.Repo, s.Branch, s.HeadSHA)
+		fmt.Fprintf(&b, "  %s @ %s  %s\n", s.Repo, branchOrDetached(s.Branch), s.HeadSHA)
 		if s.Worktree != "" {
 			fmt.Fprintf(&b, "  worktree: %s\n", s.Worktree)
 		}
@@ -179,6 +179,9 @@ func RenderContext(v ContextView, actor string) string {
 
 	if v.Project != nil {
 		fmt.Fprintf(&b, "\nProject: %s (%s)\n", v.Project.Name, v.Project.Slug)
+		// Orientation is where an agent decides what to branch from and
+		// where to send the PR, and this is the only place that knows.
+		renderConventions(&b, "  ", v.Project.Conventions)
 	} else if v.SetupHint != nil {
 		fmt.Fprintf(&b, "\n%s\n", v.SetupHint.Reason)
 		for _, c := range v.SetupHint.Collect {
@@ -231,7 +234,7 @@ func RenderIssue(v IssueView, withContext bool) string {
 	}
 	if v.Snapshot != nil {
 		s := v.Snapshot
-		fmt.Fprintf(&b, "\ntree state: %s @ %s %s (as of %s)\n", s.Repo, s.Branch, s.HeadSHA, s.RecordedAt)
+		fmt.Fprintf(&b, "\ntree state: %s @ %s %s (as of %s)\n", s.Repo, branchOrDetached(s.Branch), s.HeadSHA, s.RecordedAt)
 	}
 	if len(v.Comments) > 0 {
 		fmt.Fprintf(&b, "\nComments (%d):\n", len(v.Comments))
@@ -316,6 +319,23 @@ func RenderProjects(w io.Writer, rows []ProjectView) {
 		}
 		for _, d := range v.Dirs {
 			fmt.Fprintf(w, "  dir   %s  (%s)\n", d.Subpath, d.RemoteURL)
+		}
+		renderConventions(w, "  ", v.Conventions)
+	}
+}
+
+// renderConventions prints the conventions a project has actually recorded
+// and nothing for the ones it has not. An unset convention is not "empty",
+// it is unanswered, and printing "pr target:" with nothing after it invites
+// an agent to treat the blank as the answer (TSK-111).
+func renderConventions(w io.Writer, indent string, c ProjectConventions) {
+	for _, row := range []struct{ label, value string }{
+		{"branch", c.BranchFormat},
+		{"commit", c.CommitStyle},
+		{"pr into", c.PRTarget},
+	} {
+		if strings.TrimSpace(row.value) != "" {
+			fmt.Fprintf(w, "%s%-7s %s\n", indent, row.label, row.value)
 		}
 	}
 }
@@ -428,4 +448,15 @@ func plural(n int, singular, plural string) string {
 		return singular
 	}
 	return plural
+}
+
+// branchOrDetached names an empty branch rather than leaving a hole in the
+// line. A snapshot taken on a detached HEAD carries no branch, and the head
+// is worth recording anyway (see gitSnapshot) — "repo @  sha" would read as
+// a rendering bug, where "(detached)" reads as the fact it is.
+func branchOrDetached(branch string) string {
+	if strings.TrimSpace(branch) == "" {
+		return "(detached)"
+	}
+	return branch
 }

@@ -86,10 +86,17 @@ type GroupHint struct {
 }
 
 // UpdateIssueResult is the response from PATCH /api/issues/{ref}.
+//
+// AbandonedSteps is every step the close left unfinished, in plan order.
+// Steps never gate a close, so this is the only moment the caller is told
+// what the plan did not reach — to name it in the resolution, or to offload
+// it. The server has always sent it; this client used to decode the close
+// response without the field and drop it on the floor (TSK-113).
 type UpdateIssueResult struct {
-	ID        string     `json:"id"`
-	Ref       string     `json:"ref"`
-	GroupHint *GroupHint `json:"group_hint,omitempty"`
+	ID             string      `json:"id"`
+	Ref            string      `json:"ref"`
+	GroupHint      *GroupHint  `json:"group_hint,omitempty"`
+	AbandonedSteps []StepBrief `json:"abandoned_steps,omitempty"`
 }
 
 // IssueView is the read model for one issue.

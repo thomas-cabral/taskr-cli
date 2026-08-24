@@ -77,8 +77,15 @@ taskr doc <ref>
 taskr auth login               # reads the key from stdin, never argv
 taskr auth status
 taskr version
-taskr project ls
+taskr project ls               # projects, their repos, dirs and conventions
+taskr project init <slug> --key KEY [--branch-format F] [--pr-target BRANCH]
 ```
+
+A project's conventions — the branch-name shape, the commit style, the
+branch PRs are opened against — are printed by `project ls` and by `taskr
+context` beside the project it resolved, so an agent reads them instead of
+guessing. `project init` sets them, on a new project or an existing one; a
+convention you do not name is left exactly as it was.
 
 Every command accepts `--json` for machine-readable output; the default is
 human-readable prose, which matters most for `taskr start` — the resume
@@ -134,6 +141,21 @@ Environment variables:
   `git rev-parse HEAD`. `taskr` never runs git; exporting these lets it
   resolve your project from the repo and directory you are in, keep rot
   detection fed, and scope `new`, `offload`, `next` and `ls` to it.
+- `TASKR_BRANCH`, `TASKR_MERGE_BASE`, `TASKR_DIRTY` — the rest of the tree
+  state `new`, `offload` and `park` record on an issue, so `taskr start`
+  can tell the next reader where the work lives:
+
+  ```sh
+  export TASKR_BRANCH=$(git branch --show-current)
+  export TASKR_MERGE_BASE=$(git merge-base HEAD origin/HEAD)
+  export TASKR_DIRTY=$(git status --porcelain | cut -c4-)   # one path per line
+  ```
+
+  `TASKR_HEAD` is the gate: with no commit to anchor it, no snapshot is
+  sent at all, because a block of blank fields is worse than an honest
+  "no git snapshot has been recorded". The others are best-effort — a
+  detached HEAD has no branch and records as `(detached)` rather than
+  costing you the snapshot.
 
 ## Stability
 
