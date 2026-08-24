@@ -267,8 +267,9 @@ func (c *Client) Timeline(ctx context.Context, ref string) ([]TimelineEntry, err
 // print a real "Tree state:" block instead of "no git snapshot has been
 // recorded for this issue" (TSK-110).
 //
-// Every field comes from the environment, because taskr never runs git —
-// see gitSnapshot for which variable feeds which field. Branch is
+// Every field arrives as an environment variable, whether the caller
+// exported it or envWithRepo read it out of .git for them — nothing here
+// runs git. See gitSnapshot for which variable feeds which field. Branch is
 // omitempty on purpose: a detached HEAD has no branch, and the head is
 // still worth recording, so the field goes missing rather than empty and
 // the renderer says so out loud.

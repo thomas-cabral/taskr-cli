@@ -61,7 +61,13 @@ func TestNewSendsTheGitSnapshot(t *testing.T) {
 // TestNewOmitsTheSnapshotWithoutAHead pins the rule stepSnapshot already
 // follows: no head, no snapshot. An empty one on the wire would turn the
 // honest "none recorded" line into a block of blanks.
+//
+// "Without a head" now means the caller exported none AND there is no
+// checkout to read one out of, which is why this runs from a directory that
+// is not a repo. Anywhere inside one, discoverRepo answers and a snapshot
+// is exactly what should be sent.
 func TestNewOmitsTheSnapshotWithoutAHead(t *testing.T) {
+	t.Chdir(t.TempDir())
 	var gotBody string
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		b, _ := io.ReadAll(r.Body)
@@ -87,7 +93,12 @@ func TestNewOmitsTheSnapshotWithoutAHead(t *testing.T) {
 // lets through: a detached HEAD has no branch, and the head is still worth
 // recording. The branch goes over as empty and the renderer says
 // "(detached)" — omitted openly rather than silently.
+//
+// Run from outside a checkout: with TASKR_BRANCH deleted, a real repo
+// underfoot would supply its own branch and the case under test would never
+// arise.
 func TestNewSendsADetachedHeadSnapshot(t *testing.T) {
+	t.Chdir(t.TempDir())
 	var gotBody string
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		b, _ := io.ReadAll(r.Body)

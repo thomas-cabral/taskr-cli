@@ -15,9 +15,10 @@ type Locator struct {
 
 // LocatorFrom builds a locator from the environment and a working directory.
 //
-// taskr never runs git: TASKR_REMOTE and TASKR_ROOT are what the caller
-// already ran (`git remote get-url origin`, `git rev-parse --show-toplevel`),
-// and the subpath is derived here rather than asked for, because the caller
+// TASKR_REMOTE and TASKR_ROOT are what the caller exported if they did, and
+// otherwise what envWithRepo already read out of .git for them (repo.go) —
+// either way they arrive here as plain variables, and nothing here runs
+// git. The subpath is derived rather than asked for, because the caller
 // would only compute it the same way.
 //
 // A missing TASKR_ROOT, or a working directory outside it, yields no subpath

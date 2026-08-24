@@ -52,6 +52,9 @@ Usage:
   taskr doc show <id>                    print one document's body
   taskr auth login                       read a key from stdin and store it
   taskr auth status                      who your credential writes as, without writing
+  taskr skill install [--dir D] [--dry-run]
+                                          write the agent skills where harnesses read them
+  taskr skill ls                         where the skills are, and whether they match this binary
   taskr version                          which commit this binary was built from
   taskr project ls                       every registered project, with its repos and dirs
   taskr project init <slug> --key KEY [--name N]
@@ -64,19 +67,20 @@ new and offload accept --project <slug> to name a project outright.
 next and ls accept --all to widen past the caller's resolved project.
 Env: TASKR_API (default https://api.aitaskr.com), TASKR_KEY.
      TASKR_SESSION names this invocation context, so two terminals (or a
-     terminal and an agent) on one machine do not share a work session.
-     Defaults to the parent process id.
-     TASKR_REMOTE, TASKR_ROOT and TASKR_HEAD are the output of
-     "git remote get-url origin", "git rev-parse --show-toplevel" and
-     "git rev-parse HEAD". taskr never runs git; export them and taskr
-     resolves your project from the repo and directory you are in, keeps
-     rot detection fed, and scopes new, offload, next and ls to it.
-     TASKR_BRANCH, TASKR_MERGE_BASE and TASKR_DIRTY complete the tree state
-     that new, offload and park record on an issue — "git branch
-     --show-current", "git merge-base HEAD origin/HEAD" and "git status
-     --porcelain | cut -c4-" (one path per line). Without TASKR_HEAD no
-     snapshot is sent at all; the rest are best-effort, and a detached HEAD
-     records as "(detached)" rather than dropping the snapshot.
+     terminal and an agent) on one machine do not share a work session. It
+     defaults to a session id the harness published (CLAUDE_CODE_SESSION_ID,
+     OPENCODE_PID), and failing that to the parent process id.
+     TASKR_REMOTE, TASKR_ROOT, TASKR_HEAD and TASKR_BRANCH need no exporting:
+     taskr reads them out of .git — config, HEAD and the refs, through
+     commondir in a linked worktree — which is what resolves your project,
+     scopes new, offload, next and ls to it, and keeps rot detection fed.
+     Export one to override it, e.g. to file work against another repo.
+     TASKR_MERGE_BASE and TASKR_DIRTY complete the tree state that new,
+     offload and park record, and are the two taskr cannot read for itself:
+     "git merge-base HEAD origin/HEAD" and "git status --porcelain | cut -c4-"
+     (one path per line). With no head at all no snapshot is sent; the rest
+     are best-effort, and a detached HEAD records as "(detached)" rather
+     than dropping the snapshot.
 `
 
 // agentCLI is the agent identifier every session this CLI opens is
@@ -100,12 +104,32 @@ func Run(args []string, stdout, stderr io.Writer, getenv func(string) string) in
 
 	cmd, rest := args[0], args[1:]
 
+	// Everything below reads the environment through this wrapper, so an
+	// unset TASKR_REMOTE, TASKR_ROOT, TASKR_HEAD or TASKR_BRANCH falls back
+	// to the checkout the caller is standing in instead of to nothing. It
+	// wraps above version because the stale-binary warning is one of the
+	// answers the fallback restores: it needs a head, and a caller who
+	// exported none got silence.
+	getenv = envWithRepo(getenv, cwd())
+
 	// version answers before a target is resolved: a binary you suspect of
 	// being stale is exactly the one that may be pointed at the wrong host
 	// or hold no credential, and an answer that needed the API would be
 	// missing in the case it is wanted for.
 	if cmd == "version" || cmd == "--version" {
 		if err := cmdVersion(rest, stdout, stderr, getenv); err != nil {
+			fmt.Fprintln(stderr, "taskr:", err)
+			return 1
+		}
+		return 0
+	}
+
+	// skill answers before a target too, and for a blunter reason: the
+	// installer runs `taskr skill install` in the same breath as it puts
+	// the binary on PATH, which is minutes before the user has a key to
+	// log in with.
+	if cmd == "skill" {
+		if err := runSkill(rest, stdout, stderr, getenv); err != nil {
 			fmt.Fprintln(stderr, "taskr:", err)
 			return 1
 		}
@@ -181,8 +205,9 @@ func Run(args []string, stdout, stderr io.Writer, getenv func(string) string) in
 }
 
 // machineName is the one piece of "where am I" the CLI knows on its own.
-// Anything git-shaped — branch, remote, dirty tree — is NOT: the caller
-// reports that, because the CLI never shells out to git.
+// Anything git-shaped it either reads out of .git (see repo.go) or is told
+// by the caller — a merge base and a dirty list are the caller's to report,
+// because answering them needs git itself, which this CLI never runs.
 func machineName() string {
 	h, err := os.Hostname()
 	if err != nil {
@@ -202,16 +227,45 @@ func machineName() string {
 //
 // TASKR_SESSION wins when set, so an agent that already knows its own
 // session id can export it and have the CLI it shells out to land in the
-// same session rather than open a second one. Otherwise the parent process id
-// stands in: stable for the life of one shell, and different between two
-// terminals on the same machine — which is exactly the distinction that
-// was missing.
+// same session rather than open a second one.
+//
+// Failing that, a harness that publishes its own session id into the
+// environment is taken at its word. This is not a nicety: the parent
+// process id below assumes the caller HAS a lasting parent, and an agent
+// harness that runs each tool call in a freshly spawned shell does not —
+// every call would report a different ppid, so every call would open a new
+// work session, and `taskr context` would answer "no active session" one
+// command after `taskr start`.
+//
+// The parent process id remains the fallback: stable for the life of one
+// shell, and different between two terminals on the same machine — which is
+// exactly the distinction that was missing.
 func agentSessionID(getenv func(string) string) string {
 	if v := strings.TrimSpace(getenv("TASKR_SESSION")); v != "" {
 		return v
 	}
+	for _, key := range harnessSessionKeys {
+		if v := strings.TrimSpace(getenv(key)); v != "" {
+			return v
+		}
+	}
 	return fmt.Sprintf("ppid-%d", os.Getppid())
 }
+
+// harnessSessionKeys are the variables agent harnesses put in the
+// environment their tool calls inherit. Only a variable a harness actually
+// exports belongs here, verified against the harness itself: a name that
+// merely sounds right is a variable that is never set, and the entry then
+// does nothing except suggest the problem was handled.
+//
+// CLAUDE_CODE_SESSION_ID is the conversation, exactly the granularity a
+// work session wants. OPENCODE_PID is the opencode process, which is
+// coarser — two of its sessions share one — but it is what opencode sets,
+// and it holds still across the shells it spawns, which ppid does not.
+//
+// Codex publishes nothing of the kind and Cursor's is unconfirmed, so both
+// land on ppid below.
+var harnessSessionKeys = []string{"CLAUDE_CODE_SESSION_ID", "OPENCODE_PID"}
 
 func cwd() string {
 	d, err := os.Getwd()
@@ -1017,13 +1071,15 @@ func stepSnapshot(getenv func(string) string) *StepSnapshot {
 }
 
 // gitSnapshot builds the tree state `new`, `offload` and `park` record on
-// an issue, entirely from the environment — taskr never runs git, so every
-// value is the output of a git command the CALLER ran and exported:
+// an issue, entirely from the environment. The first four are read out of
+// .git when the caller exported nothing (repo.go); the last two are the
+// caller's to supply, because answering them needs git itself rather than
+// a file:
 //
-//	TASKR_REMOTE     git remote get-url origin        → repo
-//	TASKR_BRANCH     git branch --show-current        → branch
-//	TASKR_HEAD       git rev-parse HEAD               → head_sha
-//	TASKR_ROOT       git rev-parse --show-toplevel    → worktree
+//	TASKR_REMOTE     .git/config remote.origin.url    → repo
+//	TASKR_BRANCH     .git/HEAD                        → branch
+//	TASKR_HEAD       .git/HEAD via refs or packed-refs → head_sha
+//	TASKR_ROOT       the directory holding .git        → worktree
 //	TASKR_MERGE_BASE git merge-base HEAD origin/HEAD  → merge_base
 //	TASKR_DIRTY      git status --porcelain | cut -c4- → dirty_files
 //
