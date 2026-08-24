@@ -1196,16 +1196,14 @@ func cmdStepEdit(ctx context.Context, c *Client, args []string, stdout, stderr i
 	if len(positional) < 2 {
 		return fmt.Errorf("usage: taskr step edit <ref> <pos|id> [--title <text>] [--body <text>]")
 	}
-	ref, selector := positional[0], positional[1]
-	stepID, err := resolveStepID(ctx, c, ref, selector)
-	if err != nil {
-		return err
-	}
 
-	// Title and Body only ride along when the flag was actually passed —
-	// including when passed empty — so an unset field leaves the step
-	// untouched server-side, and an explicitly empty --title reaches the
-	// server's own refusal instead of being swallowed here.
+	// Checked before resolving the selector: a purely local usage error
+	// (neither flag given) should fail before spending a ListSteps round
+	// trip on a position that was never going to be used. Title and Body
+	// only ride along when the flag was actually passed — including when
+	// passed empty — so an unset field leaves the step untouched
+	// server-side, and an explicitly empty --title reaches the server's
+	// own refusal instead of being swallowed here.
 	var titlePtr, bodyPtr *string
 	fs.Visit(func(f *flag.Flag) {
 		switch f.Name {
@@ -1217,6 +1215,12 @@ func cmdStepEdit(ctx context.Context, c *Client, args []string, stdout, stderr i
 	})
 	if titlePtr == nil && bodyPtr == nil {
 		return fmt.Errorf("usage: taskr step edit <ref> <pos|id> [--title <text>] [--body <text>] — at least one is required")
+	}
+
+	ref, selector := positional[0], positional[1]
+	stepID, err := resolveStepID(ctx, c, ref, selector)
+	if err != nil {
+		return err
 	}
 
 	if err := c.EditStep(ctx, stepID, EditStepInput{Title: titlePtr, Body: bodyPtr, SessionID: session}); err != nil {

@@ -348,3 +348,154 @@ func TestStepLsNoSteps(t *testing.T) {
 		t.Fatalf("want the empty-plan line, got:\n%s", got)
 	}
 }
+
+// TestStepEditExplicitEmptyTitle exercises the pointer wiring at the heart
+// of `step edit`: an explicitly empty --title is non-nil and must reach
+// the wire as "title":"" so the server's own refusal fires — coalescing
+// it with "flag not passed" would swallow the refusal here instead.
+func TestStepEditExplicitEmptyTitle(t *testing.T) {
+	var gotBody string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		b, _ := io.ReadAll(r.Body)
+		gotBody = string(b)
+		w.WriteHeader(http.StatusNoContent)
+	}))
+	defer srv.Close()
+
+	var out, errb bytes.Buffer
+	env := envAt(map[string]string{"TASKR_API": srv.URL, "TASKR_KEY": "x"})
+	args := []string{"step", "edit", "TSK-1", "step-1", "--title", ""}
+	if code := Run(args, &out, &errb, env); code != 0 {
+		t.Fatalf("exit %d, stderr: %s", code, errb.String())
+	}
+	if !strings.Contains(gotBody, `"title":""`) {
+		t.Fatalf("want an explicit empty title in the request body, got %s", gotBody)
+	}
+}
+
+// TestStepEditOnlyTitle exercises the other half of the pointer wiring:
+// --title alone must not put an unset body on the wire.
+func TestStepEditOnlyTitle(t *testing.T) {
+	var gotBody string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		b, _ := io.ReadAll(r.Body)
+		gotBody = string(b)
+		w.WriteHeader(http.StatusNoContent)
+	}))
+	defer srv.Close()
+
+	var out, errb bytes.Buffer
+	env := envAt(map[string]string{"TASKR_API": srv.URL, "TASKR_KEY": "x"})
+	args := []string{"step", "edit", "TSK-1", "step-1", "--title", "new title"}
+	if code := Run(args, &out, &errb, env); code != 0 {
+		t.Fatalf("exit %d, stderr: %s", code, errb.String())
+	}
+	if !strings.Contains(gotBody, `"title":"new title"`) {
+		t.Fatalf("want the new title in the request body, got %s", gotBody)
+	}
+	if strings.Contains(gotBody, `"body"`) {
+		t.Fatalf("want no body field when --body was not passed, got %s", gotBody)
+	}
+}
+
+// TestStepEditOnlyBody is the mirror of TestStepEditOnlyTitle: --body
+// alone must not put an unset title on the wire.
+func TestStepEditOnlyBody(t *testing.T) {
+	var gotBody string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		b, _ := io.ReadAll(r.Body)
+		gotBody = string(b)
+		w.WriteHeader(http.StatusNoContent)
+	}))
+	defer srv.Close()
+
+	var out, errb bytes.Buffer
+	env := envAt(map[string]string{"TASKR_API": srv.URL, "TASKR_KEY": "x"})
+	args := []string{"step", "edit", "TSK-1", "step-1", "--body", "new body text"}
+	if code := Run(args, &out, &errb, env); code != 0 {
+		t.Fatalf("exit %d, stderr: %s", code, errb.String())
+	}
+	if !strings.Contains(gotBody, `"body":"new body text"`) {
+		t.Fatalf("want the new body in the request body, got %s", gotBody)
+	}
+	if strings.Contains(gotBody, `"title"`) {
+		t.Fatalf("want no title field when --title was not passed, got %s", gotBody)
+	}
+}
+
+// TestStepEditNoFlagsSkipsListSteps exercises the ordering fix: a purely
+// local usage error (neither --title nor --body given) is caught before
+// resolveStepID runs, so a position selector never costs a ListSteps round
+// trip that was always going to be wasted on a command that fails anyway.
+func TestStepEditNoFlagsSkipsListSteps(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		t.Fatalf("unexpected %s %s — no request should be made", r.Method, r.URL.Path)
+	}))
+	defer srv.Close()
+
+	var out, errb bytes.Buffer
+	env := envAt(map[string]string{"TASKR_API": srv.URL, "TASKR_KEY": "x"})
+	code := Run([]string{"step", "edit", "TSK-1", "2"}, &out, &errb, env)
+	if code == 0 {
+		t.Fatalf("want non-zero exit when neither --title nor --body is given, got 0")
+	}
+}
+
+// TestStepDropWireShape exercises `step drop`'s wire shape end to end:
+// POST /api/steps/<id>/drop, the reason in the request body, and the
+// response decoded as the plan ([]StepView) rather than anything wrapped.
+func TestStepDropWireShape(t *testing.T) {
+	var gotMethod, gotPath, gotBody string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotMethod, gotPath = r.Method, r.URL.Path
+		b, _ := io.ReadAll(r.Body)
+		gotBody = string(b)
+		w.Header().Set("Content-Type", "application/json")
+		fmt.Fprint(w, `[{"id":"step-1","position":1,"title":"read auth.go","status":"dropped","drop_reason":"superseded"}]`)
+	}))
+	defer srv.Close()
+
+	var out, errb bytes.Buffer
+	env := envAt(map[string]string{"TASKR_API": srv.URL, "TASKR_KEY": "x"})
+	args := []string{"step", "drop", "TSK-1", "step-1", "-m", "superseded"}
+	if code := Run(args, &out, &errb, env); code != 0 {
+		t.Fatalf("exit %d, stderr: %s", code, errb.String())
+	}
+	if gotMethod != http.MethodPost || gotPath != "/api/steps/step-1/drop" {
+		t.Fatalf("want POST /api/steps/step-1/drop, got %s %s", gotMethod, gotPath)
+	}
+	if !strings.Contains(gotBody, `"reason":"superseded"`) {
+		t.Fatalf("want the reason in the request body, got %s", gotBody)
+	}
+	// Decoded correctly as []StepView, not swallowed or misshaped: the
+	// dropped row's own status and drop_reason come back out in the
+	// rendered plan.
+	got := out.String()
+	if !strings.Contains(got, "dropped: superseded") {
+		t.Fatalf("want the dropped step rendered with its reason, got:\n%s", got)
+	}
+}
+
+// TestStepSessionID exercises the one field every step write is supposed
+// to carry: session_id lands in the request body. Picked on step start,
+// but nothing here is start-specific — the point is that a future change
+// dropping session_id from any one verb would be caught somewhere.
+func TestStepSessionID(t *testing.T) {
+	var gotBody string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		b, _ := io.ReadAll(r.Body)
+		gotBody = string(b)
+		w.Header().Set("Content-Type", "application/json")
+		fmt.Fprint(w, `{"status":"in_progress"}`)
+	}))
+	defer srv.Close()
+
+	var out, errb bytes.Buffer
+	env := envAt(map[string]string{"TASKR_API": srv.URL, "TASKR_KEY": "x", "TASKR_SESSION": "sess-42"})
+	if code := Run([]string{"step", "start", "TSK-1", "step-1"}, &out, &errb, env); code != 0 {
+		t.Fatalf("exit %d, stderr: %s", code, errb.String())
+	}
+	if !strings.Contains(gotBody, `"session_id":"sess-42"`) {
+		t.Fatalf("want session_id in the request body, got %s", gotBody)
+	}
+}
