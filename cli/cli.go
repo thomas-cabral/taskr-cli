@@ -63,6 +63,7 @@ Usage:
   taskr doc show <id>                    print one document's body
   taskr auth login                       approve in a browser, or pipe a key in
   taskr auth status                      who your credential writes as, without writing
+  taskr auth logout                      revoke the key server-side and forget it locally
   taskr skill install [--dir D] [--dry-run]
                                           write the agent skills where harnesses read them
   taskr skill ls                         where the skills are, and whether they match this binary
@@ -1841,16 +1842,80 @@ func deriveTitle(body, path string) string {
 // runAuth dispatches `taskr auth <subcommand>`. login is the only one today.
 func runAuth(args []string, stdout, stderr io.Writer, getenv func(string) string) error {
 	if len(args) < 1 {
-		return fmt.Errorf("usage: taskr auth login | taskr auth status")
+		return fmt.Errorf("usage: taskr auth login | taskr auth status | taskr auth logout")
 	}
 	switch args[0] {
 	case "login":
 		return authLogin(os.Stdin, args[1:], stdout, stderr, getenv)
 	case "status":
 		return authStatusCmd(args[1:], stdout, stderr, getenv)
+	case "logout":
+		return authLogoutCmd(args[1:], stdout, stderr, getenv)
 	default:
-		return fmt.Errorf("usage: taskr auth login | taskr auth status")
+		return fmt.Errorf("usage: taskr auth login | taskr auth status | taskr auth logout")
 	}
+}
+
+// authLogoutCmd forgets the credential for the target host. Revocation is
+// attempted first and the local deletion never depends on it: a logout that
+// fails because the office VPN dropped must still take the key off the
+// machine, or the person retries forever while the plaintext file sits
+// there. The two outcomes are reported distinctly — a skipped revocation
+// leaves a live credential on the server, and saying nothing about it would
+// turn a partial success into a silent one.
+//
+// The key's own id comes from GET /api/auth/status (key_id), not from
+// listing /api/keys: the list never returns anything derived from the
+// plaintext, so there is no way to match the stored material to a row.
+func authLogoutCmd(args []string, stdout, stderr io.Writer, getenv func(string) string) error {
+	fs := flag.NewFlagSet("auth logout", flag.ContinueOnError)
+	fs.SetOutput(stderr)
+	if _, err := parseFlags(fs, args); err != nil {
+		return err
+	}
+
+	target, err := resolveTarget(getenv, stderr)
+	if err != nil {
+		return err
+	}
+
+	envKey := getenv("TASKR_KEY")
+	if target.Key == "" {
+		fmt.Fprintf(stdout, "Not logged in to %s.\n", target.Host)
+		return nil
+	}
+
+	client := &Client{BaseURL: target.BaseURL, Key: target.Key}
+	status, err := client.AuthStatus(context.Background())
+	switch {
+	case err == nil && status.KeyID != "":
+		if err := client.RevokeKey(context.Background(), status.KeyID); err != nil {
+			var apiErr *APIError
+			if errors.As(err, &apiErr) && apiErr.Status == http.StatusNotFound {
+				fmt.Fprintf(stdout, "Key already revoked on %s.\n", target.Host)
+			} else {
+				fmt.Fprintf(stderr, "taskr: warning: could not revoke the key on %s (%v) — it is forgotten here but still live server-side. Revoke it from the web app's keys page.\n", target.Host, err)
+			}
+		} else {
+			fmt.Fprintf(stdout, "Revoked key %s on %s.\n", status.KeyID, target.Host)
+		}
+	case err != nil:
+		fmt.Fprintf(stderr, "taskr: warning: could not reach %s to revoke the key (%v) — it is forgotten here but still live server-side. Revoke it from the web app's keys page.\n", target.Host, err)
+	default:
+		// Authenticated but no key_id: a session cookie credential rather
+		// than an API key. Nothing server-side to revoke through this path.
+		fmt.Fprintf(stdout, "No API key to revoke on %s.\n", target.Host)
+	}
+
+	if envKey != "" {
+		fmt.Fprint(stdout, "TASKR_KEY is set in this shell, so nothing was removed from disk; unset it to stop using this credential.\n")
+		return nil
+	}
+	if err := clearKey(target.Host); err != nil {
+		return fmt.Errorf("forgetting the stored key for %s: %w", target.Host, err)
+	}
+	fmt.Fprintf(stdout, "Forgotten the stored key for %s.\n", target.Host)
+	return nil
 }
 
 // authStatusCmd answers "who do my writes come out as", without performing

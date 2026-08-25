@@ -166,6 +166,26 @@ func warnIfReadable(warn io.Writer, path string) {
 		path, perm, path)
 }
 
+// clearKey forgets the stored credential for host. The current-host marker
+// cannot survive it — a Current pointing at a host with no key would send
+// every unconfigured invocation to a host that then answers 401 — so it is
+// cleared when it pointed there, letting resolveTarget's single-host
+// fallback or the default take over.
+func clearKey(host string) error {
+	hosts, err := loadHosts(io.Discard)
+	if err != nil {
+		return err
+	}
+	if _, ok := hosts.Hosts[host]; !ok && hosts.Current != host {
+		return nil
+	}
+	delete(hosts.Hosts, host)
+	if hosts.Current == host {
+		hosts.Current = ""
+	}
+	return saveHosts(hosts)
+}
+
 // saveHosts writes the config file at mode 0600 — it holds plaintext API
 // keys, so it must never be group- or world-readable.
 func saveHosts(h hostsFile) error {
