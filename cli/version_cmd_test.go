@@ -198,3 +198,19 @@ func TestContextIsSilentWhenTheBinaryMatches(t *testing.T) {
 		t.Fatalf("want no warning when the binary is current, got: %q", errb.String())
 	}
 }
+
+// TestVersionFlagsAnswerTheSame pins the conventional spellings: --version
+// landed with the verb, and -v/-V are what scripts and muscle memory reach
+// for first. All four run the same command and exit 0.
+func TestVersionFlagsAnswerTheSame(t *testing.T) {
+	withStamp(t, buildStamp{Module: mod, Revision: built, Time: "2026-08-19T19:36:06Z", GoVersion: "go1.26.5"})
+	for _, flag := range []string{"--version", "-v", "-V"} {
+		var out, errb bytes.Buffer
+		if code := Run([]string{flag}, &out, &errb, envAt(map[string]string{})); code != 0 {
+			t.Fatalf("%s: exit %d, stderr: %s", flag, code, errb.String())
+		}
+		if !strings.Contains(out.String(), mod) {
+			t.Fatalf("%s: output missing %q:\n%s", flag, mod, out.String())
+		}
+	}
+}

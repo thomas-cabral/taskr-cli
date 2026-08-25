@@ -68,6 +68,7 @@ Usage:
                                           write the agent skills where harnesses read them
   taskr skill ls                         where the skills are, and whether they match this binary
   taskr version                          which commit this binary was built from
+                                          (--version, -v, -V all answer the same)
   taskr project ls                       every registered project, with its repos and dirs
   taskr project init <slug> --key KEY [--name N]
                             [--branch-format F] [--commit-style S] [--pr-target BRANCH]
@@ -128,7 +129,7 @@ func Run(args []string, stdout, stderr io.Writer, getenv func(string) string) in
 	// being stale is exactly the one that may be pointed at the wrong host
 	// or hold no credential, and an answer that needed the API would be
 	// missing in the case it is wanted for.
-	if cmd == "version" || cmd == "--version" {
+	if cmd == "version" || cmd == "--version" || cmd == "-v" || cmd == "-V" {
 		if err := cmdVersion(rest, stdout, stderr, getenv); err != nil {
 			fmt.Fprintln(stderr, "taskr:", err)
 			return 1
