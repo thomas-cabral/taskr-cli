@@ -112,6 +112,11 @@ has to be distinguished from an actual finding.
 > TestValidKeyHeaderPasses covers the empty-but-present header case and
 > passes."
 
+A brief that turns out wrong is fixed in place — `taskr edit <ref> --desc
+"..."` rewrites it, `--title` renames it — never closed and re-opened,
+which would orphan the comments, steps, checks and ledger that already
+accrued.
+
 ## How to triage
 
 Triage answers one question per issue: **is this report still real?** It is
@@ -227,6 +232,7 @@ Every command below also accepts `--json`.
 | `taskr park -m <note> [-r reason]` | stop, naming the next action |
 | `taskr end [-r reason]` | close the current session (not the issue) |
 | `taskr close <ref> [-r resolution]` | finish the issue; the session stays open |
+| `taskr edit <ref> [--title T] [--desc TEXT] [--clear-desc] [--priority P]` | fix an open issue's record; sends only what you name; kind is fixed at creation |
 | `taskr offload <title> -m <brief> [-k kind] [-s severity]` | file discovered work |
 | `taskr comment <ref> -m <text>` | add a comment |
 | `taskr triage [--all]` | what needs a verdict, and why: `new`, `rot` or `expired` |
@@ -253,6 +259,7 @@ Every command below also accepts `--json`.
 | `taskr project attach [--project S] [--repo URL] [--dir SUBPATH]` | register a repo, or a dir inside one |
 | `taskr auth login` | prints a code to approve in a browser; a piped key still works |
 | `taskr auth status` | who your credential writes as, without writing anything |
+| `taskr auth logout` | revoke the key server-side and forget it locally; works offline, warning when revocation could not happen |
 | `taskr skill install [--dir D] [--dry-run]` | write these skills where your harness reads them |
 | `taskr version` | which commit this binary was built from, and whether it matches your checkout |
 
