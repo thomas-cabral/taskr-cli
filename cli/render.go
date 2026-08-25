@@ -231,6 +231,47 @@ func RenderCandidates(w io.Writer, rows []Candidate) {
 	tw.Flush()
 }
 
+// RenderTriageQueue renders `taskr triage` with no verdict: what needs a
+// look, and why. The WHY column says the reason in words a reader acts on
+// rather than the wire token — the same labels the app's triage screen
+// uses — and carries the evidence for it: the two SHAs for rot, the date
+// of the verdict that aged out for expired.
+func RenderTriageQueue(w io.Writer, rows []TriageCandidate) {
+	tw := tabwriter.NewWriter(w, 0, 2, 2, ' ', 0)
+	fmt.Fprintln(tw, "REF\tREASON\tTITLE\tWHY")
+	for _, r := range rows {
+		fmt.Fprintf(tw, "%s\t%s\t%s\t%s\n", r.IssueRef, r.Reason, r.Title, triageWhy(r))
+	}
+	tw.Flush()
+}
+
+func triageWhy(r TriageCandidate) string {
+	switch r.Reason {
+	case "new":
+		return "never triaged"
+	case "rot":
+		if r.SnapshotSHA != "" && r.LatestSHA != "" {
+			return fmt.Sprintf("the branch moved under it: %s -> %s", short(r.SnapshotSHA), short(r.LatestSHA))
+		}
+		return "the branch moved under it"
+	case "expired":
+		if r.TriagedAt != "" {
+			return "its verdict aged out (triaged " + dateOf(r.TriagedAt) + ")"
+		}
+		return "its verdict aged out"
+	}
+	return r.Reason
+}
+
+// dateOf trims an RFC 3339 timestamp to its date: the day a verdict was
+// recorded is what a reader compares against, not the second.
+func dateOf(ts string) string {
+	if len(ts) >= 10 {
+		return ts[:10]
+	}
+	return ts
+}
+
 // RenderIssue renders `taskr show`.
 func RenderIssue(v IssueView, withContext bool) string {
 	var b strings.Builder

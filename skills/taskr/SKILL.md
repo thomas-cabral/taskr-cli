@@ -31,6 +31,10 @@ parseable output — the default is human-readable.
   freshly imported project can have plenty of open work and an empty
   queue; `next` says so when that is why, and `--untriaged` ranks it
   anyway.
+- **When you are asked to triage, or `next` is empty because nothing has a
+  verdict** — `taskr triage`, bare, lists what needs a verdict and why. It
+  is the only triage surface: `ls` shows no verdicts and `next --untriaged`
+  is the ready pool. See "How to triage" below.
 - **When you notice something wrong that isn't what you're working on** — a
   bug, a missing test, a bad assumption in another file — `taskr offload`
   it immediately. Do not fix it inline (scope creep) and do not just
@@ -107,6 +111,43 @@ has to be distinguished from an actual finding.
 > cookie expiry, timestamps are fresh. Done when a test alongside
 > TestValidKeyHeaderPasses covers the empty-but-present header case and
 > passes."
+
+## How to triage
+
+Triage answers one question per issue: **is this report still real?** It is
+not "is the work done" (that is `close`) and not "what should I do next"
+(that is `next`). The queue is `taskr triage` with nothing after it:
+
+```bash
+taskr triage                 # what needs a verdict in this project, and why
+taskr triage --all           # every project
+taskr triage TSK-24          # does this one issue need a verdict
+```
+
+Each row says why it is there: `new` (never triaged), `rot` (the branch
+moved under it — the row shows the snapshot SHA against the latest one), or
+`expired` (its verdict aged out; a verdict lasts a fortnight). **`taskr ls`
+is not a triage surface** — it shows no verdicts and no reasons, and mixes
+in closed and already-triaged issues. **`taskr next --untriaged` is not one
+either**: it is the ready pool, so it drops blocked issues, which still
+need verdicts, and never surfaces a rotted or expired one.
+
+For each row: `taskr show <ref>`, check the claim against the tree you are
+standing in — open the `file:line` it names, run the repro if it has one —
+and record what you found:
+
+```bash
+taskr triage TSK-24 actionable -e "still reproduces at internal/api/auth.go:104 on 9f3c2ab"
+taskr triage TSK-25 already_fixed -e "fixed by https://github.com/you/app/pull/14"
+taskr triage TSK-26 duplicate -d TSK-24
+taskr triage TSK-27 needs_info -e "no repro, and the file it names does not exist"
+```
+
+`-e` names where you looked — a `file:line`, a commit, a full `https://`
+URL — because a verdict without evidence is the next reader's dead end.
+`already_fixed` and `stale` say the work is not needed; `needs_info` says
+it cannot be judged yet. `actionable` is the only verdict that puts an
+issue into `taskr next`; it does not start the work, `taskr start` does.
 
 ## How to attach a document
 
@@ -188,6 +229,8 @@ Every command below also accepts `--json`.
 | `taskr close <ref> [-r resolution]` | finish the issue; the session stays open |
 | `taskr offload <title> -m <brief> [-k kind] [-s severity]` | file discovered work |
 | `taskr comment <ref> -m <text>` | add a comment |
+| `taskr triage [--all]` | what needs a verdict, and why: `new`, `rot` or `expired` |
+| `taskr triage <ref>` | does this one issue need a verdict |
 | `taskr triage <ref> <verdict> [-e evidence] [-d dup-ref]` | record a verdict |
 | `taskr timeline <ref>` | the event ledger |
 | `taskr check add <ref> -m <procedure> [--expect T] [--human]` | record a done-when that cannot be verified yet |
@@ -218,7 +261,8 @@ Every command below also accepts `--json`.
 `verdict`: actionable, already_fixed, duplicate, stale, needs_info.
 
 `new` and `offload` take `--project <slug>` to name a project outright;
-`next` and `ls` take `--all` to widen past the project you're standing in.
+`next`, `ls` and `triage` take `--all` to widen past the project you're
+standing in.
 
 Without `--project`, an offload lands in the project of the repo you are
 standing in — not the project of your session. That is the point of the

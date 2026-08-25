@@ -217,6 +217,24 @@ func (c *Client) Next(ctx context.Context, machine string, loc Locator, all, unt
 	return v, err
 }
 
+// TriageQueue lists the open issues that need a fresh verdict — never
+// triaged, verdict expired, or the repo moved under them — scoped to the
+// caller's project unless all is set. ref narrows it to one issue: an empty
+// answer then means that issue's verdict is fresh, and a ref naming no
+// issue is an error rather than an empty queue.
+func (c *Client) TriageQueue(ctx context.Context, loc Locator, ref string, all bool) ([]TriageCandidate, error) {
+	q := url.Values{}
+	setIf(q, "ref", ref)
+	setIf(q, "remote_url", loc.RemoteURL)
+	setIf(q, "subpath", loc.Subpath)
+	if all {
+		q.Set("all", "1")
+	}
+	var v []TriageCandidate
+	err := c.get(ctx, "/api/triage", q, &v)
+	return v, err
+}
+
 // ListIssues searches issues by free text and status, scoped to the
 // caller's project unless all is set.
 //
