@@ -39,7 +39,11 @@ Usage:
   taskr close <ref> [-r resolution]      finish the ISSUE — end closes the session
   taskr offload <title> -m <brief> [-k kind] [-s severity]
   taskr comment <ref> -m <text>
+  taskr triage [--all]                   what needs a verdict, and why: never triaged,
+                                          verdict expired, or the branch moved under it
+  taskr triage <ref>                     does this one issue need a verdict
   taskr triage <ref> <verdict> [-e evidence] [-d duplicate-of]
+                                          record one
   taskr check add <ref> -m <procedure> [--expect <text>] [--human]
                                           record a done-when on an issue
   taskr check ls <ref>                   list an issue's checks
@@ -186,7 +190,7 @@ func Run(args []string, stdout, stderr io.Writer, getenv func(string) string) in
 	case "comment":
 		run = func() error { return cmdComment(ctx, client, rest, stdout, stderr) }
 	case "triage":
-		run = func() error { return cmdTriage(ctx, client, rest, stdout, stderr) }
+		run = func() error { return cmdTriage(ctx, client, rest, stdout, stderr, getenv) }
 	case "timeline":
 		run = func() error { return cmdTimeline(ctx, client, rest, stdout, stderr) }
 	case "doc":
@@ -475,7 +479,7 @@ func cmdNext(ctx context.Context, c *Client, args []string, stdout, stderr io.Wr
 		if pool, err := c.Next(ctx, machine, loc, *all, true); err == nil && len(pool) > 0 {
 			fmt.Fprintln(stdout,
 				"No triaged candidates, but this project has ready work with no triage verdict.\n"+
-					"`taskr next --untriaged` ranks it anyway; `taskr triage <ref> actionable` promotes one into this queue.")
+					"`taskr triage` lists what needs a verdict and why; `taskr triage <ref> actionable` promotes one into this queue; `taskr next --untriaged` ranks it anyway.")
 			return nil
 		}
 	}
@@ -878,18 +882,34 @@ func cmdComment(ctx context.Context, c *Client, args []string, stdout, stderr io
 	return nil
 }
 
-func cmdTriage(ctx context.Context, c *Client, args []string, stdout, stderr io.Writer) error {
+// cmdTriage is three verbs behind one word, told apart by what follows it.
+// Bare, it is the queue: what needs a verdict in the project you are
+// standing in, and why. With a ref alone it asks about that one issue.
+// With a ref and a verdict it records one. The list forms exist because
+// the write form was the only one for a long time, and an agent asked to
+// triage had nothing to list with but `ls` — which shows no verdicts and
+// no reasons — or `next --untriaged`, which is the ready pool and drops
+// blocked issues and stale verdicts alike (TSK-158).
+func cmdTriage(ctx context.Context, c *Client, args []string, stdout, stderr io.Writer, getenv func(string) string) error {
 	fs := flag.NewFlagSet("triage", flag.ContinueOnError)
 	fs.SetOutput(stderr)
 	evidence := fs.String("e", "", "evidence")
 	dup := fs.String("d", "", "duplicate-of ref (required when verdict is duplicate)")
+	all := fs.Bool("all", false, "every project, not just the one resolved from where you're standing")
 	jsonOut := fs.Bool("json", false, "output JSON")
 	positional, err := parseFlags(fs, args)
 	if err != nil {
 		return err
 	}
 	if len(positional) < 2 {
-		return fmt.Errorf("usage: taskr triage <ref> <verdict> [-e evidence] [-d duplicate-of]")
+		if *evidence != "" || *dup != "" {
+			return fmt.Errorf("usage: taskr triage <ref> <verdict> [-e evidence] [-d duplicate-of] — -e and -d go with a verdict")
+		}
+		ref := ""
+		if len(positional) == 1 {
+			ref = positional[0]
+		}
+		return triageQueue(ctx, c, ref, *all, *jsonOut, stdout, getenv)
 	}
 	ref, verdict := positional[0], positional[1]
 	if err := c.SubmitTriage(ctx, ref, SubmitTriageInput{Verdict: verdict, Evidence: *evidence, DuplicateOf: *dup}); err != nil {
@@ -899,6 +919,38 @@ func cmdTriage(ctx context.Context, c *Client, args []string, stdout, stderr io.
 		return printJSON(stdout, okResult{OK: true})
 	}
 	fmt.Fprintf(stdout, "Recorded verdict %q for %s.\n", verdict, ref)
+	return nil
+}
+
+// triageQueue prints what needs a verdict. ref empty is the project's
+// queue; ref set is one issue, where an empty answer is the good news that
+// its verdict is fresh — said in words, because an empty table reads as
+// "nothing here" and would send the reader off to check.
+func triageQueue(ctx context.Context, c *Client, ref string, all, jsonOut bool, stdout io.Writer, getenv func(string) string) error {
+	loc := LocatorFrom(getenv, cwd())
+	rows, err := c.TriageQueue(ctx, loc, ref, all)
+	if err != nil {
+		return err
+	}
+	if jsonOut {
+		if rows == nil {
+			rows = []TriageCandidate{}
+		}
+		return printJSON(stdout, rows)
+	}
+	if len(rows) == 0 {
+		switch {
+		case ref != "":
+			fmt.Fprintf(stdout, "%s has a fresh verdict; nothing to triage.\n", ref)
+		case all:
+			fmt.Fprintln(stdout, "Nothing needs a verdict in any project.")
+		default:
+			fmt.Fprintln(stdout, "Nothing needs a verdict in this project. `taskr triage --all` widens to every project.")
+		}
+		return nil
+	}
+	RenderTriageQueue(stdout, rows)
+	fmt.Fprintln(stdout, "\nRead one with `taskr show <ref>`, then record what you found: `taskr triage <ref> <verdict> -e \"<file:line or URL>\"`.")
 	return nil
 }
 

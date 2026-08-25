@@ -325,6 +325,20 @@ type Candidate struct {
 	Reasons  []string `json:"reasons"`
 }
 
+// TriageCandidate is one open issue that needs a fresh verdict, and why.
+// Reason is new (never triaged), rot (the repo moved under the issue's
+// snapshot: SnapshotSHA against LatestSHA), or expired (its verdict aged
+// out; TriagedAt is when that verdict was recorded).
+type TriageCandidate struct {
+	IssueID     string `json:"issue_id"`
+	IssueRef    string `json:"issue_ref"`
+	Title       string `json:"title"`
+	Reason      string `json:"reason"`
+	SnapshotSHA string `json:"snapshot_sha,omitempty"`
+	LatestSHA   string `json:"latest_sha,omitempty"`
+	TriagedAt   string `json:"triaged_at,omitempty"`
+}
+
 // TimelineEntry is one event in an issue's history.
 type TimelineEntry struct {
 	GlobalSeq  int64  `json:"global_seq"`
