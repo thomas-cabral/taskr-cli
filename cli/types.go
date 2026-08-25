@@ -130,16 +130,43 @@ type IssueView struct {
 }
 
 // SearchResult is the compact row `ls` renders. It never carries the
-// agent-context layer.
+// agent-context layer. The search server may additionally send layer, score
+// and evidence fields (TSK-137's layered agent search); they decode here and
+// pass through --json untouched, but the human table does not render them.
 type SearchResult struct {
-	ID          string `json:"id"`
-	Ref         string `json:"ref"`
-	Title       string `json:"title"`
-	Status      string `json:"status"`
-	Kind        string `json:"kind"`
-	Priority    string `json:"priority"`
-	ProjectSlug string `json:"project_slug"`
-	UpdatedAt   string `json:"updated_at"`
+	ID          string  `json:"id"`
+	Ref         string  `json:"ref"`
+	Title       string  `json:"title"`
+	Status      string  `json:"status"`
+	Kind        string  `json:"kind"`
+	Priority    string  `json:"priority"`
+	ProjectSlug string  `json:"project_slug"`
+	UpdatedAt   string  `json:"updated_at"`
+	Rot         bool    `json:"rot,omitempty"`
+	Layer       string  `json:"layer,omitempty"`
+	Score       float64 `json:"score,omitempty"`
+	Evidence    string  `json:"ev,omitempty"`
+}
+
+// AgentSearchVersion versions the `taskr ls --json` envelope shape. An agent
+// branches on it rather than guessing what it is holding; bump when a field
+// changes meaning.
+const AgentSearchVersion = 1
+
+// AgentSearchResponse is the machine-facing search envelope: per-layer hit
+// counts (zeros present, never omitted), corpus spelling suggestions when
+// the exact layer missed, ready-to-append widen filters, and a More flag so
+// truncation is never silent. Zero results is information, not absence:
+// didyoumean plus layers tells the caller whether to retry broader or give
+// up honestly.
+type AgentSearchResponse struct {
+	Q          string         `json:"q"`
+	Layers     map[string]int `json:"layers"`
+	DidYouMean []string       `json:"didyoumean,omitempty"`
+	Expand     []string       `json:"expand,omitempty"`
+	Results    []SearchResult `json:"results"`
+	More       bool           `json:"more"`
+	V          int            `json:"v"`
 }
 
 // RelatedIssue is one neighbour in an issue's graph.
