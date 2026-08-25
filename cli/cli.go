@@ -37,6 +37,8 @@ Usage:
   taskr park -m <note> [-r reason]       stop work, naming the next action
   taskr end [-r reason]                  close out the current session
   taskr close <ref> [-r resolution]      finish the ISSUE — end closes the session
+  taskr edit <ref> [--title T] [--desc TEXT] [--clear-desc] [--priority P]
+                                          fix the record; kind is fixed at creation
   taskr offload <title> -m <brief> [-k kind] [-s severity]
   taskr comment <ref> -m <text>
   taskr triage [--all]                   what needs a verdict, and why: never triaged,
@@ -187,6 +189,8 @@ func Run(args []string, stdout, stderr io.Writer, getenv func(string) string) in
 		run = func() error { return cmdEnd(ctx, client, rest, stdout, stderr, machine, session) }
 	case "close":
 		run = func() error { return cmdClose(ctx, client, rest, stdout, stderr, machine, session) }
+	case "edit":
+		run = func() error { return cmdEdit(ctx, client, rest, stdout, stderr, session) }
 	case "offload":
 		run = func() error { return cmdOffload(ctx, client, rest, stdout, stderr, machine, session, getenv) }
 	case "comment":
@@ -793,6 +797,70 @@ func cmdClose(ctx context.Context, c *Client, args []string, stdout, stderr io.W
 	if session := liveSessionOn(ctx, c, machine, agentSession, ref); session != "" {
 		fmt.Fprintf(stdout, "Session %s is still active on it — run `taskr end` to close it out.\n", session)
 	}
+	return nil
+}
+
+// cmdEdit fixes the record on an open issue: title, description, priority.
+// It PATCHes only the fields given, so a partial edit cannot blank the
+// rest — the server treats an empty field as untouched, and --clear-desc
+// is the one deliberate exception, because "clear the brief" and "never
+// mentioned it" are different requests that empty-string-as-untouched
+// cannot tell apart. Kind has no flag on purpose: the server holds it as
+// a wire constant fixed at creation, so offering it would promise a write
+// the endpoint refuses.
+func cmdEdit(ctx context.Context, c *Client, args []string, stdout, stderr io.Writer, session string) error {
+	fs := flag.NewFlagSet("edit", flag.ContinueOnError)
+	fs.SetOutput(stderr)
+	title := fs.String("title", "", "new title")
+	desc := fs.String("desc", "", "new description body")
+	clearDesc := fs.Bool("clear-desc", false, "empty the description")
+	priority := fs.String("priority", "", "critical|high|medium|low")
+	jsonOut := fs.Bool("json", false, "output JSON")
+	positional, err := parseFlags(fs, args)
+	if err != nil {
+		return err
+	}
+	if len(positional) < 1 {
+		return fmt.Errorf("usage: taskr edit <ref> [--title T] [--desc TEXT] [--clear-desc] [--priority P]")
+	}
+	if *desc != "" && *clearDesc {
+		return fmt.Errorf("--desc and --clear-desc contradict each other; say which you mean")
+	}
+
+	in := UpdateIssueInput{SessionID: session}
+	var changed []string
+	if *title != "" {
+		in.Title = *title
+		changed = append(changed, "title")
+	}
+	if *clearDesc {
+		empty := ""
+		in.Description = &empty
+		changed = append(changed, "description")
+	} else if *desc != "" {
+		in.Description = desc
+		changed = append(changed, "description")
+	}
+	if *priority != "" {
+		in.Priority = *priority
+		changed = append(changed, "priority")
+	}
+	if len(changed) == 0 {
+		return fmt.Errorf("nothing to change — give at least one of --title, --desc, --clear-desc, --priority")
+	}
+	ref := positional[0]
+
+	out, err := c.UpdateIssue(ctx, ref, in)
+	if err != nil {
+		return err
+	}
+	if out.Ref != "" {
+		ref = out.Ref
+	}
+	if *jsonOut {
+		return printJSON(stdout, out)
+	}
+	fmt.Fprintf(stdout, "Updated %s: %s.\n", ref, strings.Join(changed, ", "))
 	return nil
 }
 

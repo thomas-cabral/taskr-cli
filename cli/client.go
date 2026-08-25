@@ -385,15 +385,24 @@ func (c *Client) GetDocument(ctx context.Context, id string) (DocumentView, erro
 // UpdateIssueInput is the subset of PATCH /api/issues/{ref} the CLI sends.
 // The endpoint takes more than this; a field left empty is untouched
 // server-side, so `close` sends only what closing means.
+// UpdateIssueInput is the subset of PATCH /api/issues/{ref} the CLI sends.
+// Empty means untouched, matching the server's contract — except
+// Description, a pointer so an explicit "" clears the brief while an
+// omitted field leaves it alone. Kind is deliberately absent: the server
+// treats it as a wire constant fixed at creation, so edit cannot offer it.
 type UpdateIssueInput struct {
-	Status        string `json:"status,omitempty"`
-	Resolution    string `json:"resolution,omitempty"`
-	DespiteChecks bool   `json:"despite_checks,omitempty"`
+	Title         string  `json:"title,omitempty"`
+	Description   *string `json:"description,omitempty"`
+	Priority      string  `json:"priority,omitempty"`
+	Status        string  `json:"status,omitempty"`
+	Resolution    string  `json:"resolution,omitempty"`
+	DespiteChecks bool    `json:"despite_checks,omitempty"`
+	SessionID     string  `json:"session_id,omitempty"`
 }
 
-// UpdateIssue is the write behind `taskr close`. It is spelled generally
-// rather than as CloseIssue because the endpoint is general: a later verb
-// that reprioritises or reopens has the method it needs already.
+// UpdateIssue is the write behind `taskr close` and `taskr edit`. It is
+// spelled generally rather than as CloseIssue because the endpoint is
+// general: one PATCH carries both the close and the reprioritise.
 //
 // The result carries a GroupHint when the closed issue belongs to a group —
 // the parent to check back on, and the sibling to pick up next — so the
