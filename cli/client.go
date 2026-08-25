@@ -405,6 +405,14 @@ func (c *Client) UpdateIssue(ctx context.Context, ref string, in UpdateIssueInpu
 }
 
 // AddChild adds an existing issue to a group.
+// RevokeKey revokes one of the caller org's keys by id. The server scopes
+// the delete to the caller's org and refuses an id outside it, so a wrong
+// id reads the same as a dead one: not found.
+func (c *Client) RevokeKey(ctx context.Context, id string) error {
+	_, err := c.doWrite(ctx, http.MethodDelete, "/api/keys/"+url.PathEscape(id), nil)
+	return err
+}
+
 func (c *Client) AddChild(ctx context.Context, parent, child string) error {
 	req := struct {
 		Child string `json:"child"`
