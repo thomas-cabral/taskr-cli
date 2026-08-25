@@ -15,7 +15,8 @@ parseable output — the default is human-readable.
 1. **Orient** — `taskr context` or `taskr next`: where am I, what's ready.
 2. **Pick** — `taskr show <ref>` to read it, `taskr start <ref>` to begin.
 3. **Work** — do the task, keeping the plan on the issue with `taskr step`
-   so it survives you, not just the session.
+   so it survives you, not just the session — and moving each step as you
+   reach it, not after.
 4. **Offload** what you find — `taskr offload` — without derailing.
 5. **Attach** anything durable you wrote — a spec, a plan — to its issue.
 6. **Park** with a note — `taskr park -m "<next action>"` — before you stop.
@@ -54,11 +55,18 @@ parseable output — the default is human-readable.
   `taskr check run <id> --pass --measure list.p50=0.057s --conditions
   "c50, 10 keys" [--sha <head>] [-e <doc-id>]`. `taskr next` prints
   pending human-run checks as their own block — that is how a person
-  finds what only they can move.
+  finds what only they can move, so a `--human` check names the exact page
+  they have to open: the full `https://` URL of the dashboard, console or
+  pull request, because that block is all they will read before deciding.
 - **Before you stop for any reason** — done, blocked, interrupted, out of
   context, or handing off — `taskr park -m "<note>"`. A session that ends
   without parking leaves the next reader nothing to resume from.
 - **When an issue is fully done**, `taskr close <ref> -r "<how it ended>"`.
+  When it ended by merging, the resolution carries the pull request's URL
+  and the merge commit — `-r "merged https://github.com/you/app/pull/14 as
+  4c8656a"` — because the resolution is the first thing `taskr show` prints
+  and the last thing anyone writes on the issue, so it is where the link to
+  what actually happened belongs.
   Three verbs sound alike here and do different things: `close` finishes the
   ISSUE, `end` closes the work SESSION and leaves the issue where it is, and
   `triage` records whether a report was real — which is not the same question
@@ -75,6 +83,12 @@ done.** "Where it lives" means a `file:line`, not a vague area. If you
 ruled something out, say so — otherwise the next agent re-runs your dead
 end.
 
+Evidence that lives outside the repo — a CI run, a log, a dashboard, a
+review thread — is named the same way in-repo evidence is: by address. That
+means the full `https://` URL, never "#14", "the PR" or "the Grafana
+panel". A bare number resolves against whichever repo or tracker the next
+reader happens to have open, and prose resolves against nothing.
+
 **Bad:**
 > "Login is broken sometimes, might be a race condition, someone should
 > look into it."
@@ -88,8 +102,9 @@ has to be distinguished from an actual finding.
 > present-and-empty — internal/api/auth.go:104, authenticated() checks the
 > key header first and never falls through to the cookie once that branch
 > is taken. Repro: log in via the SPA, then call any endpoint with that
-> session's cookie plus an empty X-Taskr-Key header (not absent). Ruled
-> out: not cookie expiry, timestamps are fresh. Done when a test alongside
+> session's cookie plus an empty X-Taskr-Key header (not absent). Seen in
+> CI: https://github.com/you/app/actions/runs/8675309. Ruled out: not
+> cookie expiry, timestamps are fresh. Done when a test alongside
 > TestValidKeyHeaderPasses covers the empty-but-present header case and
 > passes."
 
@@ -133,7 +148,22 @@ reads. **Name the next concrete action.** Do not summarize what happened;
 
 - Bad: `-m "Worked on the auth bug, made some progress."`
 - Good: `-m "Add the empty-header-but-present-cookie case to auth_test.go,
-  next to TestValidKeyHeaderPasses; the fix in authenticated() is done."`
+  next to TestValidKeyHeaderPasses; the fix in authenticated() is done.
+  On fix/auth-cookie @ 9f3c2ab."`
+- Good, with a PR up: `-m "Address review on
+  https://github.com/you/app/pull/14, then merge. fix/auth-cookie @ 9f3c2ab."`
+
+**Name the branch and commit every time** — `fix/auth-cookie @ 9f3c2ab` —
+not only when it seems to matter. Until TSK-110 lands the CLI records no
+tree state of its own, so the resume note is the only place the branch
+exists; a note without it hands the next agent a sentence to search for.
+
+**If the work is on a pull request, its URL goes in the resume note AND in
+a comment** — `taskr comment <ref> -m "PR: https://…"`. Both, because the
+two readers render different fields: `taskr show` prints comments and not
+the resume note, and the resume packet `taskr start` prints has the note
+and NOT the comments. A link left in only one of them is invisible to the
+other reader — and the resuming agent, who needs it most, reads the packet.
 
 Always pass `-r <reason>`: `done_for_now`, `blocked`, `interrupted`,
 `context_exhausted`, or `handoff`. It's how `taskr context` and `taskr
@@ -224,6 +254,18 @@ tells the next agent "step 3 of 6, in progress since `abc123`", so picking
 the work up lands somewhere real instead of somewhere described. Add `-m`
 when the commit alone does not say what happened — `step done <ref> 3 -m
 "fallback lands in auth.go:112"` costs nothing and saves a hunt.
+
+**Moving steps is checked, not advised.** A plan you wrote and never moved
+is worse than no plan: `taskr context` reports the issue as 0/11 when it is
+3/11, and the resume packet is trusted. So taskr watches for it. When the
+issue you are working has open steps and none has moved since your session
+started, `taskr context` says so under the session, and `taskr park` says
+so *before* it parks — while the session that can still mark them exists.
+`taskr close` tells you how many of the steps it abandoned were never even
+started. Answer those lines by marking, in the moment — `step start` when
+you begin one, `step done` when it lands — not by ignoring them. A step
+marked done hours later records whatever commit HEAD happens to be at by
+then, which is the one thing the mark existed to capture.
 
 **Closing an issue abandons whatever the plan did not reach, and tells
 you.** Steps never block a close — a plan is not a promise — but `taskr

@@ -97,6 +97,11 @@ type UpdateIssueResult struct {
 	Ref            string      `json:"ref"`
 	GroupHint      *GroupHint  `json:"group_hint,omitempty"`
 	AbandonedSteps []StepBrief `json:"abandoned_steps,omitempty"`
+	// NeverStarted is how many of AbandonedSteps were still pending when
+	// the close abandoned them — never started, let alone finished. The
+	// abandoned list alone cannot say this, since every entry in it reads
+	// "abandoned" by the time the caller sees it (TSK-139).
+	NeverStarted int `json:"never_started,omitempty"`
 }
 
 // IssueView is the read model for one issue.
@@ -283,14 +288,29 @@ type AmbiguousHint struct {
 // ContextView answers "where am I and what was I doing" — the response to
 // `taskr context`.
 type ContextView struct {
-	Machine       string         `json:"machine"`
-	ActiveSession *SessionView   `json:"active_session,omitempty"`
-	ActiveIssue   *IssueView     `json:"active_issue,omitempty"`
+	Machine       string       `json:"machine"`
+	ActiveSession *SessionView `json:"active_session,omitempty"`
+	ActiveIssue   *IssueView   `json:"active_issue,omitempty"`
+	// UntouchedPlan is set when ActiveIssue has steps still open and none
+	// has moved since ActiveSession started. See its type.
+	UntouchedPlan *UntouchedPlan `json:"untouched_plan,omitempty"`
 	Parked        []SessionView  `json:"parked,omitempty"`
 	OpenIssues    int            `json:"open_issues"`
 	Project       *ProjectView   `json:"project,omitempty"`
 	SetupHint     *SetupHint     `json:"setup_hint,omitempty"`
 	Ambiguous     *AmbiguousHint `json:"ambiguous,omitempty"`
+}
+
+// UntouchedPlan is the server's report that a plan is not being kept: the
+// active session's issue has Open steps still pending or in progress, and
+// no step has been started or finished since the session began at Since.
+// An unmoved plan makes every summary lie to the next reader — 0/11 for
+// work that is 3/11 done — so it is said out loud at orientation and again
+// at park, before the session that could still fix it is gone (TSK-139).
+type UntouchedPlan struct {
+	IssueRef string `json:"issue_ref"`
+	Open     int    `json:"open"`
+	Since    string `json:"since"`
 }
 
 // Candidate is one issue in the ranked ready pool, with the reasons behind

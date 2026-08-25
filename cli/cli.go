@@ -368,25 +368,34 @@ var ErrNoActiveSession = errors.New("no active session")
 // still be active, since parking an already-parked session is itself an
 // error.
 func currentSession(ctx context.Context, c *Client, machine, agentSession string, allowParked bool) (SessionView, IssueView, error) {
+	_, s, iv, err := currentSessionView(ctx, c, machine, agentSession, allowParked)
+	return s, iv, err
+}
+
+// currentSessionView is currentSession plus the context view it was read
+// from, for the one caller that needs more of it than the session: park
+// reads UntouchedPlan off the same answer, so warning about a plan nobody
+// moved costs no second request.
+func currentSessionView(ctx context.Context, c *Client, machine, agentSession string, allowParked bool) (ContextView, SessionView, IssueView, error) {
 	v, err := c.Context(ctx, ContextQuery{Machine: machine, AgentSessionID: agentSession})
 	if err != nil {
-		return SessionView{}, IssueView{}, err
+		return ContextView{}, SessionView{}, IssueView{}, err
 	}
 	if v.ActiveSession != nil {
 		var iv IssueView
 		if v.ActiveIssue != nil {
 			iv = *v.ActiveIssue
 		}
-		return *v.ActiveSession, iv, nil
+		return v, *v.ActiveSession, iv, nil
 	}
 	if allowParked {
 		for _, s := range v.Parked {
 			if s.Machine == machine {
-				return s, IssueView{}, nil
+				return v, s, IssueView{}, nil
 			}
 		}
 	}
-	return SessionView{}, IssueView{}, fmt.Errorf("%w on %s — run `taskr start <ref>` first", ErrNoActiveSession, machine)
+	return v, SessionView{}, IssueView{}, fmt.Errorf("%w on %s — run `taskr start <ref>` first", ErrNoActiveSession, machine)
 }
 
 func cmdContext(ctx context.Context, c *Client, args []string, stdout, stderr io.Writer, machine, agentSession string, getenv func(string) string) error {
@@ -638,9 +647,17 @@ func cmdPark(ctx context.Context, c *Client, args []string, stdout, stderr io.Wr
 		return fmt.Errorf("usage: taskr park -m <note> [-r reason]")
 	}
 
-	session, issue, err := currentSession(ctx, c, machine, agentSession, false)
+	v, session, issue, err := currentSessionView(ctx, c, machine, agentSession, false)
 	if err != nil {
 		return err
+	}
+	// Said BEFORE the park goes through, not after: this is the last
+	// moment the session that could still mark those steps exists, and a
+	// warning printed under "Parked" reads as history rather than as
+	// something to do (TSK-139). The park is not refused — a plan is not a
+	// promise — it is only no longer silent.
+	if !*jsonOut {
+		renderUntouchedPlan(stdout, v.UntouchedPlan)
 	}
 	if err := c.ParkWork(ctx, ParkWorkInput{
 		SessionID: session.ID, Reason: *reason, ResumeNote: *note,
@@ -649,7 +666,7 @@ func cmdPark(ctx context.Context, c *Client, args []string, stdout, stderr io.Wr
 		return err
 	}
 	if *jsonOut {
-		return printJSON(stdout, okResult{OK: true})
+		return printJSON(stdout, parkResult{OK: true, UntouchedPlan: v.UntouchedPlan})
 	}
 	if issue.Ref != "" {
 		fmt.Fprintf(stdout, "Parked %s (%s).\n", issue.Ref, orDefault(*reason, "interrupted"))
@@ -657,6 +674,13 @@ func cmdPark(ctx context.Context, c *Client, args []string, stdout, stderr io.Wr
 		fmt.Fprintf(stdout, "Parked session %s.\n", session.ID)
 	}
 	return nil
+}
+
+// parkResult is park's --json answer: okResult plus the plan warning, so an
+// agent reading JSON is told the same thing a person reading prose is.
+type parkResult struct {
+	OK            bool           `json:"ok"`
+	UntouchedPlan *UntouchedPlan `json:"untouched_plan,omitempty"`
 }
 
 func cmdEnd(ctx context.Context, c *Client, args []string, stdout, stderr io.Writer, machine, agentSession string) error {
@@ -740,6 +764,14 @@ func cmdClose(ctx context.Context, c *Client, args []string, stdout, stderr io.W
 		fmt.Fprintf(stdout, "%d step(s) left unfinished by the close:\n", n)
 		for _, s := range out.AbandonedSteps {
 			fmt.Fprintf(stdout, "  %d. %s\n", s.Position, s.Title)
+		}
+		// A step that was never started is the shape TSK-139 is about: not
+		// a plan that ran out of road, but one that was written and never
+		// kept. Say it apart from the list, because the two want different
+		// answers — an unreached step gets offloaded; an unmoved one whose
+		// work actually landed gets named in the resolution as done.
+		if out.NeverStarted > 0 {
+			fmt.Fprintf(stdout, "%d of them were never started. If that work landed anyway, the plan now says it did not — say so in the resolution.\n", out.NeverStarted)
 		}
 		fmt.Fprintln(stdout, "Name them in the resolution, or file them with `taskr offload`.")
 	}
