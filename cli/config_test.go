@@ -121,8 +121,11 @@ func TestHostsFileIsKeyedByHostAndDoesNotClobberOtherHosts(t *testing.T) {
 }
 
 // TestAuthLoginReadsKeyFromStdinNotArgv pins design point in the plan: the
-// key is never accepted as a flag or positional argument, only piped in —
-// argv would leave it in shell history and visible in `ps`.
+// key is never accepted as a flag or positional argument — argv would leave
+// it in shell history and visible in `ps`. This test drives authLogin with
+// a strings.Reader, which isTerminal reports as not a terminal, so it takes
+// the piped-stdin path; a real terminal now gets the device flow instead
+// (see cli/device_test.go).
 //
 // The fake server here answers GET /api/auth/status rather than
 // POST /api/auth/login: browser-auth deletes the key-for-cookie exchange, so

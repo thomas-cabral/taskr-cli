@@ -5,6 +5,7 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -139,6 +140,17 @@ func TestDeviceLoginPrintsTheURLAndCodeButNeverTheDeviceCode(t *testing.T) {
 	if polls != 2 {
 		t.Errorf("polled %d times, want 2 (one pending, one success)", polls)
 	}
+
+	// The one thing this whole task exists to do: the minted key actually
+	// lands in hosts.json, under the right host.
+	hosts, err := loadHosts(io.Discard)
+	if err != nil {
+		t.Fatalf("loadHosts: %v", err)
+	}
+	host := hostKey(srv.URL)
+	if hosts.Hosts[host].Key != "tk_live" {
+		t.Errorf("stored key for %s = %q, want tk_live", host, hosts.Hosts[host].Key)
+	}
 }
 
 // slow_down means the server is asking for less traffic, and a client that
@@ -195,7 +207,12 @@ func TestDeniedApprovalStopsWithAClearMessage(t *testing.T) {
 	var out bytes.Buffer
 	err := pollDevice(context.Background(), &Client{BaseURL: srv.URL}, "dc", 0, 600,
 		func(time.Duration) {}, &out)
-	if err == nil || !strings.Contains(err.Error(), "denied") {
-		t.Fatalf("err = %v, want it to say the approval was denied", err)
+	// "nothing was granted" is pollDevice's own wording for the
+	// access_denied case, not the server's raw error code — asserting on it
+	// pins the mapping. Asserting on "denied" alone would also pass if the
+	// access_denied case were deleted from the switch, since the raw
+	// "access_denied" that falls through to default still contains it.
+	if err == nil || !strings.Contains(err.Error(), "nothing was granted") {
+		t.Fatalf("err = %v, want it to say nothing was granted", err)
 	}
 }

@@ -1954,6 +1954,14 @@ func pollDevice(ctx context.Context, client *Client, deviceCode string, interval
 	if interval <= 0 {
 		interval = 1
 	}
+	if expiresIn <= 0 {
+		// A missing or non-positive expires_in would otherwise set the
+		// deadline to now, so the loop polls once and reports "that code
+		// expired" — a confusing lie about a server bug rather than
+		// anything the person did. 600s matches the RFC 8628 examples and
+		// this package's own test fixtures.
+		expiresIn = 600
+	}
 	// The local deadline matters as much as the server's expired_token: a
 	// server that simply stops answering must not leave a terminal spinning
 	// forever.
@@ -1962,6 +1970,13 @@ func pollDevice(ctx context.Context, client *Client, deviceCode string, interval
 	for {
 		minted, err := client.DeviceToken(ctx, deviceCode)
 		if err == nil {
+			if minted.Key == "" {
+				// The stdin path guards the same case at cli.go's "no key on
+				// stdin" check: a 2xx whose JSON lacks "key" must not be
+				// saved as a credential, or the person is "logged in" with
+				// nothing and every later command 401s.
+				return fmt.Errorf("the server accepted the device but returned no key; nothing was saved")
+			}
 			if err := saveKey(hostKey(client.BaseURL), minted.Key); err != nil {
 				return err
 			}
