@@ -162,6 +162,10 @@ func RenderContext(v ContextView, actor string) string {
 			}
 		}
 		b.WriteString("\n")
+		// Orientation is where an agent decides what it is doing next, so
+		// it is where a plan nobody has kept gets said — under the session
+		// it belongs to, before anything else competes for attention.
+		renderUntouchedPlan(&b, v.UntouchedPlan)
 	} else {
 		b.WriteString("\nNo active session on this machine. Run `taskr next` or `taskr ls`, then `taskr start <ref>`.\n")
 	}
@@ -192,6 +196,19 @@ func RenderContext(v ContextView, actor string) string {
 	}
 
 	return b.String()
+}
+
+// renderUntouchedPlan is the one wording every surface uses for a plan
+// that has not moved (TSK-139): `taskr context` prints it under the active
+// session, `taskr park` prints it before parking. It names the count, the
+// issue and the verb that fixes it, because the reader is an agent mid-task
+// and the useful answer is a command, not a lecture. Nil prints nothing.
+func renderUntouchedPlan(w io.Writer, u *UntouchedPlan) {
+	if u == nil {
+		return
+	}
+	fmt.Fprintf(w, "Plan untouched: %d step(s) still open on %s and none moved since this session started (%s).\n", u.Open, u.IssueRef, u.Since)
+	fmt.Fprintf(w, "  If any of it landed, say so now — `taskr step done %s <pos> -m \"<what landed>\"` — or the next reader inherits a plan that lies.\n", u.IssueRef)
 }
 
 // RenderIssueList renders `taskr ls` and `taskr next`-shaped rows as a table.
