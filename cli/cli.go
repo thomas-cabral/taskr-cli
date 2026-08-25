@@ -924,8 +924,10 @@ func cmdTriage(ctx context.Context, c *Client, args []string, stdout, stderr io.
 
 // triageQueue prints what needs a verdict. ref empty is the project's
 // queue; ref set is one issue, where an empty answer is the good news that
-// its verdict is fresh — said in words, because an empty table reads as
-// "nothing here" and would send the reader off to check.
+// nothing is owed — said in words, because an empty table reads as
+// "nothing here" and would send the reader off to check. The queue only
+// walks open issues, so a closed ref answers empty too; the line says
+// both rather than calling a closed issue's verdict fresh.
 func triageQueue(ctx context.Context, c *Client, ref string, all, jsonOut bool, stdout io.Writer, getenv func(string) string) error {
 	loc := LocatorFrom(getenv, cwd())
 	rows, err := c.TriageQueue(ctx, loc, ref, all)
@@ -941,7 +943,7 @@ func triageQueue(ctx context.Context, c *Client, ref string, all, jsonOut bool, 
 	if len(rows) == 0 {
 		switch {
 		case ref != "":
-			fmt.Fprintf(stdout, "%s has a fresh verdict; nothing to triage.\n", ref)
+			fmt.Fprintf(stdout, "%s needs no verdict right now: its verdict is fresh, or it is closed.\n", ref)
 		case all:
 			fmt.Fprintln(stdout, "Nothing needs a verdict in any project.")
 		default:

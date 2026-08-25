@@ -100,7 +100,9 @@ func TestTriageEmptyQueueSaysSo(t *testing.T) {
 
 // TestTriageRefAsksAboutOneIssue: a ref with no verdict is a question, not
 // a usage error. The server's ?ref= filter answers it; an empty answer is
-// the good news, said in words.
+// the good news, said in words — and said for both things it can mean,
+// since the queue walks open issues only and a closed ref answers empty
+// as well.
 func TestTriageRefAsksAboutOneIssue(t *testing.T) {
 	var seen url.Values
 	srv := triageQueueServer(t, `[]`, &seen)
@@ -114,7 +116,7 @@ func TestTriageRefAsksAboutOneIssue(t *testing.T) {
 	if seen.Get("ref") != "TSK-7" {
 		t.Errorf("want ref=TSK-7 on the wire, got %v", seen)
 	}
-	if !strings.Contains(out.String(), "TSK-7 has a fresh verdict") {
+	if !strings.Contains(out.String(), "TSK-7 needs no verdict right now") || !strings.Contains(out.String(), "closed") {
 		t.Errorf("want the fresh-verdict line, got:\n%s", out.String())
 	}
 }
