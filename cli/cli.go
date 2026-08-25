@@ -487,20 +487,33 @@ func cmdLs(ctx context.Context, c *Client, args []string, stdout, stderr io.Writ
 	fs.SetOutput(stderr)
 	var status stringList
 	fs.Var(&status, "s", "filter by status (repeatable)")
-	query := fs.String("q", "", "full text search")
+	query := fs.String("q", "", "full text search; typos fall through to prefix then fuzzy matching (--json adds layers/didyoumean/expand/more/v)")
 	all := fs.Bool("all", false, "every project, not just the one resolved from where you're standing")
 	jsonOut := fs.Bool("json", false, "output JSON")
 	if _, err := parseFlags(fs, args); err != nil {
 		return err
 	}
-	rows, err := c.ListIssues(ctx, *query, status, LocatorFrom(getenv, cwd()), *all)
+	env, err := c.ListIssues(ctx, *query, status, LocatorFrom(getenv, cwd()), *all)
 	if err != nil {
 		return err
 	}
 	if *jsonOut {
-		return printJSON(stdout, rows)
+		// Agents get the whole envelope: layers, didyoumean, expand, more,
+		// and v so they know which shape they parsed. See AgentSearchResponse.
+		if env.V == 0 && env.Layers == nil {
+			// A pre-agent-search server: degrade to the bare row array
+			// that has always been the wire shape here.
+			return printJSON(stdout, env.Results)
+		}
+		return printJSON(stdout, env)
 	}
-	RenderIssueTable(stdout, rows)
+	RenderIssueTable(stdout, env.Results)
+	// Zero rows with a query is where the fuzzy tiers earn their keep — but
+	// when even they found nothing, the corpus's nearest words are the next
+	// best thing. Humans get the hint; agents got it in the envelope.
+	if len(env.Results) == 0 && *query != "" && len(env.DidYouMean) > 0 {
+		fmt.Fprintf(stdout, "\nNo matches. Did you mean: %s?\n", strings.Join(env.DidYouMean, ", "))
+	}
 	return nil
 }
 

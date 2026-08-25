@@ -219,8 +219,14 @@ func (c *Client) Next(ctx context.Context, machine string, loc Locator, all, unt
 
 // ListIssues searches issues by free text and status, scoped to the
 // caller's project unless all is set.
-func (c *Client) ListIssues(ctx context.Context, query string, status []string, loc Locator, all bool) ([]SearchResult, error) {
+//
+// It asks the server for the agent format and returns the envelope. An older
+// server answers with a bare row array instead — the first byte tells those
+// apart — and comes back as a version-0 envelope: rows intact, meta empty,
+// exactly what a pre-agent-search backend could say.
+func (c *Client) ListIssues(ctx context.Context, query string, status []string, loc Locator, all bool) (AgentSearchResponse, error) {
 	q := url.Values{}
+	q.Set("format", "agent")
 	setIf(q, "q", query)
 	for _, s := range status {
 		q.Add("status", s)
@@ -230,8 +236,19 @@ func (c *Client) ListIssues(ctx context.Context, query string, status []string, 
 	if all {
 		q.Set("all", "1")
 	}
-	var v []SearchResult
-	err := c.get(ctx, "/api/issues", q, &v)
+	body, err := c.do(ctx, http.MethodGet, "/api/issues", q, nil)
+	if err != nil {
+		return AgentSearchResponse{}, err
+	}
+	if len(body) > 0 && body[0] == '[' {
+		var rows []SearchResult
+		if err := json.Unmarshal(body, &rows); err != nil {
+			return AgentSearchResponse{}, err
+		}
+		return AgentSearchResponse{Results: rows}, nil
+	}
+	var v AgentSearchResponse
+	err = json.Unmarshal(body, &v)
 	return v, err
 }
 

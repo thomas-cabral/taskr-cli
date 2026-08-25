@@ -318,3 +318,51 @@ func TestAPIErrorCarriesTheRawBody(t *testing.T) {
 		t.Fatalf("decoded = %+v", body)
 	}
 }
+
+// TestListIssuesDecodesAgentEnvelopeAndLegacyArray pins the two wire shapes
+// ListIssues must survive (TSK-137): the versioned agent envelope from the
+// layered-search server, and the bare row array every pre-agent-search
+// server still answers with. The first byte tells them apart; getting it
+// backwards turns a search into a decode error for the whole CLI.
+func TestListIssuesDecodesAgentEnvelopeAndLegacyArray(t *testing.T) {
+	envelope := `{"q":"rewnds","layers":{"exact":0,"fuzzy":1},` +
+		`"didyoumean":["rewind"],"expand":["status=open"],` +
+		`"results":[{"ref":"TSK-9","title":"Replay loop","layer":"fuzzy","score":0.5}],` +
+		`"more":false,"v":1}`
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Query().Get("format") != "agent" {
+			t.Errorf("request missing format=agent: %s", r.URL.RawQuery)
+		}
+		fmt.Fprint(w, envelope)
+	}))
+	defer srv.Close()
+
+	c := &cli.Client{BaseURL: srv.URL}
+	env, err := c.ListIssues(context.Background(), "rewnds", nil, cli.Locator{}, false)
+	if err != nil {
+		t.Fatalf("ListIssues envelope: %v", err)
+	}
+	if env.V != 1 || env.Q != "rewnds" {
+		t.Errorf("envelope = v%d q%q, want v1 q rewnds", env.V, env.Q)
+	}
+	if len(env.DidYouMean) != 1 || env.DidYouMean[0] != "rewind" {
+		t.Errorf("didyoumean = %v, want [rewind]", env.DidYouMean)
+	}
+	if len(env.Results) != 1 || env.Results[0].Layer != "fuzzy" {
+		t.Errorf("results = %+v, want one fuzzy row", env.Results)
+	}
+
+	srv2 := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		fmt.Fprint(w, `[{"ref":"TSK-3","title":"legacy row"}]`)
+	}))
+	defer srv2.Close()
+
+	c2 := &cli.Client{BaseURL: srv2.URL}
+	old, err := c2.ListIssues(context.Background(), "", nil, cli.Locator{}, false)
+	if err != nil {
+		t.Fatalf("ListIssues legacy array: %v", err)
+	}
+	if old.V != 0 || len(old.Results) != 1 || old.Results[0].Ref != "TSK-3" {
+		t.Errorf("legacy decode = %+v, want version-0 envelope carrying the bare row", old)
+	}
+}
