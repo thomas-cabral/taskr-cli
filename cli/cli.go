@@ -1853,6 +1853,26 @@ func authStatusCmd(args []string, stdout, stderr io.Writer, getenv func(string) 
 	return nil
 }
 
+// isTerminal reports whether r is a human at a keyboard rather than
+// something that handed us a key.
+//
+// A pipe, a redirected file and /dev/null are all "someone handed us a
+// key" and keep the stdin path. A character device is a person, and
+// io.ReadAll on one blocks until Ctrl-D with nothing printed — the freeze
+// this whole change exists to remove.
+//
+// The *os.File assertion is also what keeps the existing tests honest:
+// they pass a strings.Reader, which is not a file, so they continue to
+// exercise the stdin path unchanged.
+func isTerminal(r io.Reader) bool {
+	f, ok := r.(*os.File)
+	if !ok {
+		return false
+	}
+	fi, err := f.Stat()
+	return err == nil && fi.Mode()&os.ModeCharDevice != 0
+}
+
 // authLogin reads a key from stdin — never argv, which would leave it in
 // shell history and visible in `ps` — verifies it against the target host,
 // and stores it in hosts.json keyed by that host.
