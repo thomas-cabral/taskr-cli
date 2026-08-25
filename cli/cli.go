@@ -57,7 +57,7 @@ Usage:
   taskr doc <ref>                        documents linked to an issue
   taskr doc add <ref> -f <path> [-t spec|plan|note] [--title T]
   taskr doc show <id>                    print one document's body
-  taskr auth login                       read a key from stdin and store it
+  taskr auth login                       approve in a browser, or pipe a key in
   taskr auth status                      who your credential writes as, without writing
   taskr skill install [--dir D] [--dry-run]
                                           write the agent skills where harnesses read them

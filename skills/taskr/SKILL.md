@@ -178,7 +178,7 @@ Every command below also accepts `--json`.
 | `taskr project ls` | every registered project, with its repos and dirs |
 | `taskr project init <slug> --key KEY` | create a project (see the taskr-onboarding skill) |
 | `taskr project attach [--project S] [--repo URL] [--dir SUBPATH]` | register a repo, or a dir inside one |
-| `taskr auth login` | reads a key from stdin, never a flag |
+| `taskr auth login` | prints a code to approve in a browser; a piped key still works |
 | `taskr auth status` | who your credential writes as, without writing anything |
 | `taskr skill install [--dir D] [--dry-run]` | write these skills where your harness reads them |
 | `taskr version` | which commit this binary was built from, and whether it matches your checkout |
