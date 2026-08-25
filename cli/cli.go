@@ -68,6 +68,7 @@ Usage:
   taskr auth logout                      revoke the key server-side and forget it locally
   taskr skill install [--dir D] [--dry-run]
                                           write the agent skills where harnesses read them
+  taskr completions [bash|zsh|fish]      emit a shell completion script
   taskr skill ls                         where the skills are, and whether they match this binary
   taskr version                          which commit this binary was built from
                                           (--version, -v, -V all answer the same)
@@ -147,6 +148,27 @@ func Run(args []string, stdout, stderr io.Writer, getenv func(string) string) in
 		if err := runSkill(rest, stdout, stderr, getenv); err != nil {
 			fmt.Fprintln(stderr, "taskr:", err)
 			return 1
+		}
+		return 0
+	}
+
+	// completions answers before a target resolves too: emitting a script
+	// must never depend on a host or a credential.
+	if cmd == "completions" {
+		if err := runCompletions(rest, stdout, stderr); err != nil {
+			fmt.Fprintln(stderr, "taskr:", err)
+			return 1
+		}
+		return 0
+	}
+
+	// __complete is not for people: the emitted completion scripts call it
+	// to fill issue-ref positions. It stays silent on any failure, because
+	// a completion that errors or hangs is worse than one that offers
+	// nothing.
+	if cmd == "__complete" {
+		if target, err := resolveTarget(getenv, stderr); err == nil {
+			completeRefs(context.Background(), &Client{BaseURL: target.BaseURL, Key: target.Key}, stdout)
 		}
 		return 0
 	}
