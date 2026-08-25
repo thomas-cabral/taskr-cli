@@ -477,10 +477,13 @@ func (c *Client) EndWork(ctx context.Context, in EndWorkInput) error {
 
 // OffloadInput is the wire shape POST /api/offload accepts.
 //
-// ProjectSlug, when set, wins over both the session's project and Locator —
-// the discovered work may not belong to whatever the caller is currently
-// working on. Locator is the fallback for an offload made before any
-// session exists, when there is nothing else to inherit a project from.
+// The server picks the project in this order: ProjectSlug when set; then
+// Locator — the repo the caller is standing in — when taskr knows it; then
+// the session's project. The locator outranks the session on purpose: a
+// finding offloaded from another repo belongs to that repo, and the session
+// only records where the caller was when they found it (TSK-59). A repo
+// that serves several projects is refused rather than guessed; ProjectSlug
+// is how the caller decides.
 type OffloadInput struct {
 	SessionID   string            `json:"session_id"`
 	Title       string            `json:"title"`
