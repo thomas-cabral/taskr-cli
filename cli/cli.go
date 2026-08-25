@@ -803,6 +803,9 @@ func cmdOffload(ctx context.Context, c *Client, args []string, stdout, stderr io
 	if err != nil && !errors.Is(err, ErrNoActiveSession) {
 		return err
 	}
+	// The project comes from where the caller stands (LocatorFrom), ahead
+	// of the session's — see OffloadInput. The ref printed below carries
+	// the project key, which is how a reader sees where it went.
 	res, err := c.Offload(ctx, OffloadInput{
 		SessionID: session.ID, Title: title, Brief: *brief, Kind: *kind, Severity: *severity,
 		ProjectSlug: *project, Locator: LocatorFrom(getenv, cwd()),

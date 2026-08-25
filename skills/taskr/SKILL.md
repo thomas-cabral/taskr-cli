@@ -190,6 +190,14 @@ Every command below also accepts `--json`.
 `new` and `offload` take `--project <slug>` to name a project outright;
 `next` and `ls` take `--all` to widen past the project you're standing in.
 
+Without `--project`, an offload lands in the project of the repo you are
+standing in — not the project of your session. That is the point of the
+verb: a bug noticed in another repo belongs to that repo, and the session
+only says where you were when you found it (the DISCOVERED_DURING edge
+keeps that). The session's project is the fallback for a repo taskr does
+not know. Standing at the root of a repo that serves several projects is
+an error, not a guess — say which with `--project`.
+
 ## Plans live on the issue
 
 An issue's steps are its working plan, and they are the part a resume packet
