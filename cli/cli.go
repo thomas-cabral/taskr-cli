@@ -14,6 +14,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"time"
 )
 
 const usage = `taskr — track issues, specs and plans across sessions.
@@ -1873,14 +1874,32 @@ func isTerminal(r io.Reader) bool {
 	return err == nil && fi.Mode()&os.ModeCharDevice != 0
 }
 
-// authLogin reads a key from stdin — never argv, which would leave it in
-// shell history and visible in `ps` — verifies it against the target host,
-// and stores it in hosts.json keyed by that host.
+// authLogin logs in to the target host. A person at a terminal is walked
+// through the device flow (RFC 8628); anything else is assumed to have
+// piped a key on stdin — never argv, which would leave it in shell history
+// and visible in `ps` — and keeps the path it has always had, so nothing in
+// CI, in a container, or in a documented pipeline has to change.
 func authLogin(stdin io.Reader, args []string, stdout, stderr io.Writer, getenv func(string) string) error {
 	fs := flag.NewFlagSet("auth login", flag.ContinueOnError)
 	fs.SetOutput(stderr)
 	if _, err := parseFlags(fs, args); err != nil {
 		return err
+	}
+
+	target, err := resolveTarget(getenv, stderr)
+	if err != nil {
+		return err
+	}
+
+	// A person at a terminal gets the device flow; anything that handed us a
+	// key on stdin keeps the path it has always had, so nothing in CI, in a
+	// container, or in a documented pipeline has to change.
+	if isTerminal(stdin) {
+		host, _ := os.Hostname()
+		if host == "" {
+			host = "an unnamed machine"
+		}
+		return authLoginDevice(context.Background(), target.BaseURL, "taskr CLI on "+host, stdout, stderr)
 	}
 
 	data, err := io.ReadAll(stdin)
@@ -1891,11 +1910,6 @@ func authLogin(stdin io.Reader, args []string, stdout, stderr io.Writer, getenv 
 	if key == "" {
 		return fmt.Errorf("no key on stdin — pipe it in, e.g. `echo $TASKR_KEY | taskr auth login`")
 	}
-
-	target, err := resolveTarget(getenv, stderr)
-	if err != nil {
-		return err
-	}
 	client := &Client{BaseURL: target.BaseURL, Key: key}
 	if err := client.Login(context.Background(), key); err != nil {
 		return err
@@ -1905,4 +1919,72 @@ func authLogin(stdin io.Reader, args []string, stdout, stderr io.Writer, getenv 
 	}
 	fmt.Fprintf(stdout, "Logged in to %s.\n", target.Host)
 	return nil
+}
+
+// authLoginDevice runs RFC 8628 from the device's side: open a flow, show
+// the person where to go, and poll until they settle it.
+func authLoginDevice(ctx context.Context, baseURL, clientName string, stdout, stderr io.Writer) error {
+	client := &Client{BaseURL: baseURL}
+	d, err := client.DeviceCode(ctx, clientName)
+	if err != nil {
+		return err
+	}
+
+	// The device code is deliberately absent from all of this: it is the
+	// credential, and anything on a screen is shoulder-surfable.
+	fmt.Fprintf(stdout, "\n  Open:  %s\n  Code:  %s\n", d.VerificationURI, d.UserCode)
+	if d.VerificationURIComplete != "" {
+		fmt.Fprintf(stdout, "\n  Or go straight there: %s\n", d.VerificationURIComplete)
+	}
+	fmt.Fprint(stdout, "\nWaiting for approval...\n")
+
+	if err := pollDevice(ctx, client, d.DeviceCode, d.Interval, d.ExpiresIn, time.Sleep, stdout); err != nil {
+		return err
+	}
+	return nil
+}
+
+// pollDevice is the poll loop. interval and deadline come from the server on
+// every flow rather than being compiled in, which is what lets polling load
+// be retuned without shipping a new binary to every machine. sleep is a
+// parameter so a test can run the loop without spending real seconds.
+func pollDevice(ctx context.Context, client *Client, deviceCode string, interval, expiresIn int,
+	sleep func(time.Duration), stdout io.Writer) error {
+
+	if interval <= 0 {
+		interval = 1
+	}
+	// The local deadline matters as much as the server's expired_token: a
+	// server that simply stops answering must not leave a terminal spinning
+	// forever.
+	deadline := time.Now().Add(time.Duration(expiresIn) * time.Second)
+
+	for {
+		minted, err := client.DeviceToken(ctx, deviceCode)
+		if err == nil {
+			if err := saveKey(hostKey(client.BaseURL), minted.Key); err != nil {
+				return err
+			}
+			fmt.Fprintf(stdout, "\nLogged in. This machine writes as %s.\n", minted.Actor)
+			return nil
+		}
+
+		switch {
+		case strings.Contains(err.Error(), "authorization_pending"):
+			// keep going
+		case strings.Contains(err.Error(), "slow_down"):
+			interval += 5
+		case strings.Contains(err.Error(), "access_denied"):
+			return fmt.Errorf("the request was denied in the browser; nothing was granted")
+		case strings.Contains(err.Error(), "expired_token"):
+			return fmt.Errorf("that code expired — run `taskr auth login` again")
+		default:
+			return err
+		}
+
+		if !time.Now().Before(deadline) {
+			return fmt.Errorf("that code expired — run `taskr auth login` again")
+		}
+		sleep(time.Duration(interval) * time.Second)
+	}
 }
