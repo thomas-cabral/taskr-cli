@@ -704,3 +704,57 @@ func setIf(q url.Values, key, value string) {
 		q.Set(key, value)
 	}
 }
+
+// --- Device flow (RFC 8628) ---
+
+// DeviceCodeView is what POST /api/auth/device/code answers — RFC 8628
+// §3.2. DeviceCode is the credential half and is never printed.
+type DeviceCodeView struct {
+	DeviceCode              string `json:"device_code"`
+	UserCode                string `json:"user_code"`
+	VerificationURI         string `json:"verification_uri"`
+	VerificationURIComplete string `json:"verification_uri_complete"`
+	ExpiresIn               int    `json:"expires_in"`
+	Interval                int    `json:"interval"`
+}
+
+// MintedKeyView is the key the poll hands back, once.
+type MintedKeyView struct {
+	ID     string   `json:"id"`
+	Key    string   `json:"key"`
+	Name   string   `json:"name"`
+	Actor  string   `json:"actor"`
+	Scopes []string `json:"scopes"`
+}
+
+// DeviceCode opens a device authorization. It carries no credential — that
+// is the point of the grant — so it uses the plain post path rather than
+// write, which would attach an Idempotency-Key this endpoint does not want.
+func (c *Client) DeviceCode(ctx context.Context, clientName string) (DeviceCodeView, error) {
+	req, err := json.Marshal(map[string]string{"client_name": clientName})
+	if err != nil {
+		return DeviceCodeView{}, err
+	}
+	body, err := c.do(ctx, http.MethodPost, "/api/auth/device/code", nil, req)
+	if err != nil {
+		return DeviceCodeView{}, err
+	}
+	var v DeviceCodeView
+	return v, json.Unmarshal(body, &v)
+}
+
+// DeviceToken is one poll. A non-2xx comes back as *APIError whose Message
+// is the server's own text, which for this endpoint is one of RFC 8628's
+// error codes verbatim — so a caller branches on err.Error().
+func (c *Client) DeviceToken(ctx context.Context, deviceCode string) (MintedKeyView, error) {
+	req, err := json.Marshal(map[string]string{"device_code": deviceCode})
+	if err != nil {
+		return MintedKeyView{}, err
+	}
+	body, err := c.do(ctx, http.MethodPost, "/api/auth/device/token", nil, req)
+	if err != nil {
+		return MintedKeyView{}, err
+	}
+	var v MintedKeyView
+	return v, json.Unmarshal(body, &v)
+}

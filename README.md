@@ -57,8 +57,8 @@ go build -o bin/taskr ./cmd/taskr
 taskr auth login
 ```
 
-Reads the key from stdin, never argv — it never lands in shell history or
-a process listing.
+Prints a verification URL and short code; approve it in a browser.
+You can also pipe a key for CI and containers: `echo $TASKR_KEY | taskr auth login`.
 
 ## Usage
 
@@ -89,7 +89,8 @@ taskr comment <ref> -m <text>
 taskr triage <ref> <verdict> [-e evidence] [-d duplicate-of]
 taskr timeline <ref>
 taskr doc <ref>
-taskr auth login               # reads the key from stdin, never argv
+taskr auth login               # prints a code, approve it in your browser
+echo $TASKR_KEY | taskr auth login   # or pipe a key, for CI and containers
 taskr auth status
 taskr version
 taskr project ls               # projects, their repos, dirs and conventions
