@@ -68,6 +68,8 @@ Usage:
   taskr auth logout                      revoke the key server-side and forget it locally
   taskr skill install [--dir D] [--dry-run]
                                           write the agent skills where harnesses read them
+  taskr skill enforce [--dry-run]        plant a session-start nudge in each harness so
+                                          agents actually load them
   taskr completions [bash|zsh|fish]      emit a shell completion script
   taskr skill ls                         where the skills are, and whether they match this binary
   taskr version                          which commit this binary was built from
