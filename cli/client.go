@@ -333,8 +333,8 @@ type CreateIssueInput struct {
 	Snapshot    *GitSnapshotInput `json:"git_snapshot,omitempty"`
 }
 
-func (c *Client) CreateIssue(ctx context.Context, in CreateIssueInput) (IssueRef, error) {
-	var v IssueRef
+func (c *Client) CreateIssue(ctx context.Context, in CreateIssueInput) (CreatedIssue, error) {
+	var v CreatedIssue
 	err := c.write(ctx, http.MethodPost, "/api/issues", in, &v)
 	return v, err
 }
@@ -530,8 +530,8 @@ type OffloadInput struct {
 	Snapshot    *GitSnapshotInput `json:"git_snapshot,omitempty"`
 }
 
-func (c *Client) Offload(ctx context.Context, in OffloadInput) (OffloadResult, error) {
-	var v OffloadResult
+func (c *Client) Offload(ctx context.Context, in OffloadInput) (CreatedOffload, error) {
+	var v CreatedOffload
 	err := c.write(ctx, http.MethodPost, "/api/offload", in, &v)
 	return v, err
 }
@@ -795,4 +795,12 @@ func (c *Client) DeviceToken(ctx context.Context, deviceCode string) (MintedKeyV
 	}
 	var v MintedKeyView
 	return v, json.Unmarshal(body, &v)
+}
+
+// Neighbors fetches the semantic suggestions for one issue (TSK-167):
+// open issues whose text resembles it, with no existing edge between them.
+func (c *Client) Neighbors(ctx context.Context, ref string) ([]Neighbor, error) {
+	var v []Neighbor
+	err := c.get(ctx, "/api/issues/"+url.PathEscape(ref)+"/neighbors", nil, &v)
+	return v, err
 }

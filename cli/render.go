@@ -518,3 +518,21 @@ func branchOrDetached(branch string) string {
 	}
 	return branch
 }
+
+// RenderSimilar prints semantic suggestions beside some issue (TSK-167):
+// score, ref, title, then the action that records a confirmation — hint
+// names the command for the surface being rendered ("taskr new" suggests a
+// relate; triage suggests the duplicate verdict). Silent when empty:
+// feature off, embedder degraded, or genuinely nothing alike.
+func RenderSimilar(w io.Writer, similar []Neighbor, hint string) {
+	if len(similar) == 0 {
+		return
+	}
+	fmt.Fprintf(w, "Similar open issues:\n")
+	for _, n := range similar {
+		fmt.Fprintf(w, "  %.2f  %-9s %s\n", n.Score, n.Ref, n.Title)
+	}
+	if hint != "" {
+		fmt.Fprintf(w, "%s\n", hint)
+	}
+}

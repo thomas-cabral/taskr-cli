@@ -15,6 +15,34 @@ type IssueRef struct {
 	Ref string `json:"ref"`
 }
 
+// Neighbor is one semantic suggestion from the duplicate gate (TSK-167):
+// an open issue whose text resembles the one just filed, with nothing
+// already connecting the two. Score is cosine similarity; comparable only
+// to other Neighbor scores.
+type Neighbor struct {
+	ID      string  `json:"id"`
+	Ref     string  `json:"ref"`
+	Title   string  `json:"title"`
+	Status  string  `json:"status"`
+	Project string  `json:"project,omitempty"`
+	Score   float64 `json:"score"`
+}
+
+// CreatedIssue is POST /api/issues' response: the ref plus, when the
+// server's semantic feature is on and matches exist, the duplicate gate's
+// suggestions. Embedding IssueRef keeps every existing caller compiling.
+type CreatedIssue struct {
+	IssueRef
+	Similar []Neighbor `json:"similar,omitempty"`
+}
+
+// CreatedOffload is POST /api/offload's response, same shape reasoning as
+// CreatedIssue.
+type CreatedOffload struct {
+	OffloadResult
+	Similar []Neighbor `json:"similar,omitempty"`
+}
+
 // DocumentRef names a document without its body.
 type DocumentRef struct {
 	ID    string `json:"id"`
