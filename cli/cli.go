@@ -583,6 +583,16 @@ func cmdShow(ctx context.Context, c *Client, args []string, stdout, stderr io.Wr
 		fmt.Fprintln(stdout, "\nChecks:")
 		RenderChecks(stdout, v.Checks)
 	}
+	// Semantic neighbours ride only on --context (the agent path): they are
+	// statistical suggestions, and the human detail view keeps them to the
+	// web UI. An error here degrades to silence — a read that failed must
+	// not fail a show.
+	if *withContext {
+		if nb, err := c.Neighbors(ctx, positional[0]); err == nil {
+			fmt.Fprintln(stdout)
+			RenderSimilar(stdout, nb, "")
+		}
+	}
 	return nil
 }
 
@@ -625,6 +635,7 @@ func cmdNew(ctx context.Context, c *Client, args []string, stdout, stderr io.Wri
 			}
 			fmt.Fprintf(stdout, "Created %s — %s\n", ref.Ref, title)
 			fmt.Fprintf(stdout, "Could not add it to %s: %v\n", *parent, err)
+			RenderSimilar(stdout, ref.Similar, fmt.Sprintf("If one is the same work: taskr relate %s DUPLICATE_OF <ref>", ref.Ref))
 			return nil
 		}
 		if *jsonOut {
@@ -638,6 +649,7 @@ func cmdNew(ctx context.Context, c *Client, args []string, stdout, stderr io.Wri
 		return printJSON(stdout, ref)
 	}
 	fmt.Fprintf(stdout, "Created %s — %s\n", ref.Ref, title)
+	RenderSimilar(stdout, ref.Similar, fmt.Sprintf("If one is the same work: taskr relate %s DUPLICATE_OF <ref>", ref.Ref))
 	return nil
 }
 
@@ -946,6 +958,7 @@ func cmdOffload(ctx context.Context, c *Client, args []string, stdout, stderr io
 		return printJSON(stdout, res)
 	}
 	fmt.Fprintf(stdout, "Offloaded %s — %s\n", res.Issue.Ref, title)
+	RenderSimilar(stdout, res.Similar, fmt.Sprintf("If one is the same work: taskr relate %s DUPLICATE_OF <ref>", res.Issue.Ref))
 	if session.ID == "" {
 		fmt.Fprintf(stdout, "No active session on %s, so it is filed without one.\n", machine)
 	}
@@ -1025,6 +1038,18 @@ func triageQueue(ctx context.Context, c *Client, ref string, all, jsonOut bool, 
 	rows, err := c.TriageQueue(ctx, loc, ref, all)
 	if err != nil {
 		return err
+	}
+	// Triage assist (TSK-167): examining ONE issue surfaces its likely
+	// twins, so recording `duplicate -d <ref>` no longer requires already
+	// knowing the twin exists. Degrades to silence when the feature is off
+	// or nothing matches — never blocks a verdict.
+	if ref != "" && !jsonOut {
+		if nb, err := c.Neighbors(ctx, ref); err == nil && len(nb) > 0 {
+			fmt.Fprintln(stdout)
+			RenderSimilar(stdout, nb,
+				fmt.Sprintf("Same work? taskr triage %s duplicate -d <ref>", ref))
+			fmt.Fprintln(stdout)
+		}
 	}
 	if jsonOut {
 		if rows == nil {

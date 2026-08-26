@@ -16,6 +16,13 @@ import (
 func triageQueueServer(t *testing.T, body string, seen *url.Values) *httptest.Server {
 	t.Helper()
 	return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// The single-ref flow consults the duplicate gate (TSK-167); an
+		// empty answer keeps these tests about the queue itself.
+		if r.Method == http.MethodGet && strings.HasSuffix(r.URL.Path, "/neighbors") {
+			w.Header().Set("Content-Type", "application/json")
+			fmt.Fprint(w, "null")
+			return
+		}
 		if r.Method != http.MethodGet || r.URL.Path != "/api/triage" {
 			t.Fatalf("unexpected %s %s", r.Method, r.URL.Path)
 		}
@@ -209,6 +216,37 @@ func TestTriageListFormsAppearInTheHelpText(t *testing.T) {
 	for _, want := range []string{"taskr triage [--all]", "taskr triage <ref>  ", "taskr triage <ref> <verdict>"} {
 		if !strings.Contains(stdout.String(), want) {
 			t.Errorf("help text does not mention %q:\n%s", want, stdout.String())
+		}
+	}
+}
+
+// TestTriageRefShowsDuplicateCandidates pins the triage assist (TSK-167):
+// examining one issue lists semantic twins with scores and the exact
+// command that records the verdict, so `duplicate -d` no longer requires
+// prior knowledge that a twin exists.
+func TestTriageRefShowsDuplicateCandidates(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		switch {
+		case r.URL.Path == "/api/triage":
+			fmt.Fprint(w, `[{"issue_id":"i-1","issue_ref":"TSK-7","title":"can't login after reset","reason":"new"}]`)
+		case strings.HasSuffix(r.URL.Path, "/neighbors"):
+			fmt.Fprint(w, `[{"id":"i-2","ref":"TSK-4","title":"auth 401 on reset flow","status":"open","score":0.93}]`)
+		default:
+			t.Fatalf("unexpected %s %s", r.Method, r.URL.Path)
+		}
+	}))
+	defer srv.Close()
+
+	var out, errb bytes.Buffer
+	env := envAt(map[string]string{"TASKR_API": srv.URL, "TASKR_KEY": "x", "TASKR_REMOTE": "https://github.com/you/app.git"})
+	if code := Run([]string{"triage", "TSK-7"}, &out, &errb, env); code != 0 {
+		t.Fatalf("exit %d, stderr: %s", code, errb.String())
+	}
+	text := out.String()
+	for _, want := range []string{"Similar open issues:", "0.93", "TSK-4", "duplicate -d <ref>"} {
+		if !strings.Contains(text, want) {
+			t.Errorf("output missing %q:\n%s", want, text)
 		}
 	}
 }
