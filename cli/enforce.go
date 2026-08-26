@@ -85,7 +85,7 @@ func cmdSkillEnforce(args []string, stdout, stderr io.Writer, getenv func(string
 	add("opencode", opencodePath, status)
 
 	if root := repoRoot(home); root == "" {
-		add("cursor", "", "skipped (not inside a git repository; rerun from a repo to plant .cursor/rules/taskr.mdc)")
+		add("cursor", "(not inside a git repository — rerun from a repo to plant .cursor/rules/taskr.mdc)", "skipped")
 	} else {
 		rulePath := filepath.Join(root, ".cursor", "rules", "taskr.mdc")
 		if status, err = writeSkill(rulePath, []byte(cursorRule()), *dryRun); err != nil {
