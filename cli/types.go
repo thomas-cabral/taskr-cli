@@ -365,6 +365,11 @@ type TriageCandidate struct {
 	SnapshotSHA string `json:"snapshot_sha,omitempty"`
 	LatestSHA   string `json:"latest_sha,omitempty"`
 	TriagedAt   string `json:"triaged_at,omitempty"`
+	// Twin is the closest open issue in the same project with no edge
+	// between the two, when one scores at or above the duplicate bar —
+	// the duplicate net at scan time (TSK-178). Absent when the server's
+	// embedding feature is off or nothing comes close.
+	Twin *Neighbor `json:"twin,omitempty"`
 }
 
 // TimelineEntry is one event in an issue's history.

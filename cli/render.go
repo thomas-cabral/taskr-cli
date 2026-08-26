@@ -236,13 +236,43 @@ func RenderCandidates(w io.Writer, rows []Candidate) {
 // rather than the wire token — the same labels the app's triage screen
 // uses — and carries the evidence for it: the two SHAs for rot, the date
 // of the verdict that aged out for expired.
+//
+// A TWIN column appears only when some row has one: the closest open issue
+// the server found nothing already connecting it to, scored the way every
+// suggestion is (TSK-178). It is the duplicate net at scan time — a pair
+// sitting in the queue as two rows reads as one before either is opened —
+// and the footer names the verdict that collapses it.
 func RenderTriageQueue(w io.Writer, rows []TriageCandidate) {
-	tw := tabwriter.NewWriter(w, 0, 2, 2, ' ', 0)
-	fmt.Fprintln(tw, "REF\tREASON\tTITLE\tWHY")
+	twins := false
 	for _, r := range rows {
-		fmt.Fprintf(tw, "%s\t%s\t%s\t%s\n", r.IssueRef, r.Reason, r.Title, triageWhy(r))
+		twins = twins || r.Twin != nil
+	}
+	tw := tabwriter.NewWriter(w, 0, 2, 2, ' ', 0)
+	if twins {
+		fmt.Fprintln(tw, "REF\tREASON\tTITLE\tWHY\tTWIN")
+	} else {
+		fmt.Fprintln(tw, "REF\tREASON\tTITLE\tWHY")
+	}
+	for _, r := range rows {
+		fmt.Fprintf(tw, "%s\t%s\t%s\t%s", r.IssueRef, r.Reason, r.Title, triageWhy(r))
+		if twins {
+			fmt.Fprintf(tw, "\t%s", twinCell(r.Twin))
+		}
+		fmt.Fprintln(tw)
 	}
 	tw.Flush()
+	if twins {
+		fmt.Fprintln(w, "\nTWIN is the closest open issue nothing already links to. Same work? `taskr triage <ref> duplicate -d <twin>`.")
+	}
+}
+
+// twinCell is the score-then-ref shape RenderSimilar uses, so a twin reads
+// the same in the queue as it does under `taskr triage <ref>`.
+func twinCell(n *Neighbor) string {
+	if n == nil {
+		return ""
+	}
+	return fmt.Sprintf("%.2f %s", n.Score, n.Ref)
 }
 
 func triageWhy(r TriageCandidate) string {
