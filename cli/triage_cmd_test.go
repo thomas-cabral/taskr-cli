@@ -250,3 +250,51 @@ func TestTriageRefShowsDuplicateCandidates(t *testing.T) {
 		}
 	}
 }
+
+// TestTriageBareShowsTwins is the scan-time duplicate net (TSK-178): a row
+// the server paired with a twin carries it in a TWIN column, score then
+// ref like every other suggestion, and the footer names the verdict that
+// collapses the pair. A row without one leaves the cell empty.
+func TestTriageBareShowsTwins(t *testing.T) {
+	var seen url.Values
+	srv := triageQueueServer(t, `[
+		{"issue_id":"i-1","issue_ref":"TSK-176","title":"resetting my password then logging in fails","reason":"new",
+		 "twin":{"id":"i-2","ref":"TSK-177","title":"login 401 after completing password reset","status":"open","score":0.91}},
+		{"issue_id":"i-3","issue_ref":"TSK-9","title":"export to csv times out","reason":"new"}
+	]`, &seen)
+	defer srv.Close()
+
+	var out, errb bytes.Buffer
+	env := envAt(map[string]string{"TASKR_API": srv.URL, "TASKR_KEY": "x", "TASKR_REMOTE": "https://github.com/you/app.git"})
+	if code := Run([]string{"triage"}, &out, &errb, env); code != 0 {
+		t.Fatalf("exit %d, stderr: %s", code, errb.String())
+	}
+	got := out.String()
+	for _, want := range []string{"TWIN", "0.91 TSK-177", "duplicate -d <twin>"} {
+		if !strings.Contains(got, want) {
+			t.Errorf("want %q in output, got:\n%s", want, got)
+		}
+	}
+	for _, line := range strings.Split(got, "\n") {
+		if strings.HasPrefix(line, "TSK-9") && strings.Contains(line, "TSK-177") {
+			t.Errorf("the twinless row borrowed a twin:\n%s", got)
+		}
+	}
+}
+
+// TestTriageBareHidesTheTwinColumnWhenNoneExist keeps the feature-off table
+// exactly what it was: no column, no footer, nothing to explain.
+func TestTriageBareHidesTheTwinColumnWhenNoneExist(t *testing.T) {
+	var seen url.Values
+	srv := triageQueueServer(t, `[{"issue_id":"i-1","issue_ref":"TSK-1","title":"never looked at","reason":"new"}]`, &seen)
+	defer srv.Close()
+
+	var out, errb bytes.Buffer
+	env := envAt(map[string]string{"TASKR_API": srv.URL, "TASKR_KEY": "x", "TASKR_REMOTE": "https://github.com/you/app.git"})
+	if code := Run([]string{"triage"}, &out, &errb, env); code != 0 {
+		t.Fatalf("exit %d, stderr: %s", code, errb.String())
+	}
+	if got := out.String(); strings.Contains(got, "TWIN") {
+		t.Errorf("TWIN column rendered with no twins:\n%s", got)
+	}
+}
