@@ -291,6 +291,32 @@ func TestEnforceWritesTheCursorRuleInsideARepository(t *testing.T) {
 	}
 }
 
+// A dotfiles repository at ~ must not count as "inside a repository":
+// Cursor never reads ~/.cursor/rules, so a rule planted there is a file
+// that lies about doing something.
+func TestEnforceSkipsTheCursorRuleWhenHomeIsTheRepository(t *testing.T) {
+	home := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(home, ".git"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	work := filepath.Join(home, "somewhere")
+	if err := os.MkdirAll(work, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Chdir(work)
+
+	stdout, stderr, code := runEnforce(t, homeEnv(home))
+	if code != 0 {
+		t.Fatalf("enforce exited %d, stderr: %s", code, stderr)
+	}
+	if !strings.Contains(stdout, "skipped") {
+		t.Fatalf("a dotfiles repo at home should not get the cursor rule, got:\n%s", stdout)
+	}
+	if _, err := os.Stat(filepath.Join(home, ".cursor")); !os.IsNotExist(err) {
+		t.Fatal("enforce planted a cursor rule under home")
+	}
+}
+
 // The nudge is what the Claude Code hook prints into every session; it has
 // to point at orientation and cost one read to follow.
 func TestSkillNudgePrintsTheDirective(t *testing.T) {

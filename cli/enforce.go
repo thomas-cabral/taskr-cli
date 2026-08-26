@@ -84,7 +84,7 @@ func cmdSkillEnforce(args []string, stdout, stderr io.Writer, getenv func(string
 	}
 	add("opencode", opencodePath, status)
 
-	if root := repoRoot(); root == "" {
+	if root := repoRoot(home); root == "" {
 		add("cursor", "", "skipped (not inside a git repository; rerun from a repo to plant .cursor/rules/taskr.mdc)")
 	} else {
 		rulePath := filepath.Join(root, ".cursor", "rules", "taskr.mdc")
@@ -255,13 +255,19 @@ func configHome(getenv func(string) string, home string) string {
 
 // repoRoot walks up from the working directory to the nearest directory
 // holding a .git entry — a directory in a checkout, a file in a worktree,
-// either counts. Empty when there is none.
-func repoRoot() string {
+// either counts. Empty when there is none. The home directory itself does
+// not count even when it has a .git: a dotfiles repo at ~ would otherwise
+// turn every shell into "inside a repository" and plant the cursor rule at
+// ~/.cursor/rules, a directory Cursor never reads.
+func repoRoot(home string) string {
 	dir, err := os.Getwd()
 	if err != nil {
 		return ""
 	}
 	for {
+		if dir == home {
+			return ""
+		}
 		if _, err := os.Stat(filepath.Join(dir, ".git")); err == nil {
 			return dir
 		}
