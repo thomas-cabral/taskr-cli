@@ -108,6 +108,14 @@ human-readable prose, which matters most for `taskr start` — the resume
 packet is the product, not a data dump. Run `taskr help` for the full
 command reference.
 
+`new` and `offload` answer with any open issue that already says the same
+thing — `Similar open issues:`, scored, matched by meaning rather than
+keyword — so a twin is caught before it becomes two records. The same block
+rides on `show --context`, `triage <ref>` lists the twins the `duplicate`
+verdict needs, and the bare `triage` queue marks pairs in a `TWIN` column.
+Suggestions only: nothing is blocked, and closed or already-linked issues
+are never offered.
+
 ## Checks
 
 A check is a done-when — a constraint that gates `taskr close`. Register

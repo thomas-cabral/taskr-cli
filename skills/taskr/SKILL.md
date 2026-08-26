@@ -40,7 +40,12 @@ parseable output — the default is human-readable.
   it immediately. Do not fix it inline (scope creep) and do not just
   mention it in your final message and move on (that evaporates the moment
   the conversation ends). Offloading is nearly free; losing the thread
-  isn't.
+  isn't. `new` and `offload` answer with any open issue that already says
+  the same thing — `Similar open issues:`, each with a score and ref,
+  matched by meaning rather than keyword. Read that block before moving
+  on: if one is the same work, `taskr relate <ref> DUPLICATE_OF <twin>`
+  rather than leaving two records of one bug. It is a suggestion, never a
+  refusal — the issue is already filed when you see it.
 - **The moment you write a spec, a plan, or any document meant to outlive
   the session**, attach it to its issue — before you keep working, not at
   the end. A spec that exists only as a file in git is invisible to
@@ -131,7 +136,13 @@ taskr triage TSK-24          # does this one issue need a verdict
 
 Each row says why it is there: `new` (never triaged), `rot` (the branch
 moved under it — the row shows the snapshot SHA against the latest one), or
-`expired` (its verdict aged out; a verdict lasts a fortnight). **`taskr ls`
+`expired` (its verdict aged out; a verdict lasts a fortnight). A row may
+also carry a `TWIN` — the closest open issue nothing already links to,
+matched by meaning — and `taskr triage <ref>` lists an issue's twins with
+scores. That is the `duplicate` verdict's input: open the twin, and if it
+is the same work record `duplicate -d <twin>`; a twin that is merely
+related gets `taskr relate <ref> RELATES_TO <twin>` instead, so it stops
+being suggested. **`taskr ls`
 is not a triage surface** — it shows no verdicts and no reasons, and mixes
 in closed and already-triaged issues. **`taskr next --untriaged` is not one
 either**: it is the ready pool, so it drops blocked issues, which still
