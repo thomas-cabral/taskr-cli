@@ -14,15 +14,19 @@ import (
 // enforceDirective is the session-start nudge every shim delivers. Skills
 // are found by description, which leaves loading to the model's judgment;
 // this one paragraph is the part that is not left to judgment. It has to
-// stay short — it is injected into every session on the machine — and it
-// has to point somewhere, because a nudge that cannot be followed in one
-// step is scenery.
-const enforceDirective = "taskr is installed on this machine. Before starting any work, run " +
-	"`taskr context` — it reports whether a work session is already in progress " +
-	"and what it was doing. Follow the taskr skill (orient, pick, step, offload, " +
-	"park; installed at ~/.agents/skills/taskr/SKILL.md). When you notice work " +
-	"that is not what you are working on, `taskr offload` it instead of fixing " +
-	"it inline."
+// stay short — it is injected into every session on the machine — and its
+// first imperative has to be the skill invocation itself: the first live
+// test (TSK-188) showed a model obeys the one executable ask it sees, so
+// "run taskr context" alone gets the command run and the skill skipped.
+// For the same reason it must not summarize the loop — a model handed
+// five verbs feels informed enough to skip the load they stand for.
+const enforceDirective = "taskr is installed on this machine. Before any other action — " +
+	"including clarifying questions — invoke the taskr skill (listed as `taskr` " +
+	"in your skills; SKILL.md at ~/.agents/skills/taskr/), then run `taskr " +
+	"context`. The request you were just given may already be an open issue or " +
+	"a parked session — check before treating it as new work. When you notice " +
+	"work that is not what you are working on, `taskr offload` it instead of " +
+	"fixing it inline."
 
 // The markers fencing the directive inside a file the user also writes.
 // Everything between them belongs to taskr and is rewritten on upgrade;
