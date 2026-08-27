@@ -41,15 +41,19 @@ var skillTargets = []string{
 // key would fail on every fresh machine.
 func runSkill(args []string, stdout, stderr io.Writer, getenv func(string) string) error {
 	if len(args) == 0 {
-		return fmt.Errorf("usage: taskr skill install [--dir <path>] [--dry-run]\n       taskr skill ls")
+		return fmt.Errorf("usage: taskr skill install [--dir <path>] [--dry-run]\n       taskr skill enforce [--dry-run]\n       taskr skill ls")
 	}
 	switch args[0] {
 	case "install":
 		return cmdSkillInstall(args[1:], stdout, stderr, getenv)
+	case "enforce":
+		return cmdSkillEnforce(args[1:], stdout, stderr, getenv)
+	case "nudge":
+		return cmdSkillNudge(stdout)
 	case "ls":
 		return cmdSkillLs(args[1:], stdout, getenv)
 	default:
-		return fmt.Errorf("unknown skill command %q — try install or ls", args[0])
+		return fmt.Errorf("unknown skill command %q — try install, enforce or ls", args[0])
 	}
 }
 

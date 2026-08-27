@@ -272,6 +272,7 @@ Every command below also accepts `--json`.
 | `taskr auth status` | who your credential writes as, without writing anything |
 | `taskr auth logout` | revoke the key server-side and forget it locally; works offline, warning when revocation could not happen |
 | `taskr skill install [--dir D] [--dry-run]` | write these skills where your harness reads them |
+| `taskr skill enforce [--dry-run]` | plant a session-start nudge in each harness so agents load them |
 | `taskr version` | which commit this binary was built from, and whether it matches your checkout |
 
 `kind`: bug, feature, task, chore, spike, question, group.
@@ -389,6 +390,11 @@ directory Claude Code, Codex, Cursor and opencode read — the installer runs
 it for you. `taskr skill ls` reports whether the copy on disk still matches
 the binary; `modified` means an upgraded taskr is describing verbs your
 installed skill has never heard of, and `taskr skill install` fixes it.
+`taskr skill enforce` goes one step further: it plants a short
+session-start nudge in each harness (a Claude Code hook, marked blocks in
+the Codex and opencode AGENTS.md files, a Cursor rule in the current
+repo) so a fresh session is told to orient with `taskr context` instead
+of being left to discover the skill by its description.
 
 ## What taskr does not do
 

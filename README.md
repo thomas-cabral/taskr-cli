@@ -35,8 +35,20 @@ exists at all. Set `TASKR_SKILLS=0` to skip that, or run it yourself later:
 ```bash
 taskr skill install    # ~/.agents/skills (Codex, Cursor, opencode)
                        # ~/.claude/skills (Claude Code)
+taskr skill enforce    # session-start nudge: Claude Code hook, Codex and
+                       # opencode AGENTS.md blocks, a Cursor rule in this repo
 taskr skill ls         # where they are, and whether they match this binary
 ```
+
+Installing puts the skills where every harness looks; loading them is
+still the model's call, made from a one-line description. `taskr skill
+enforce` closes that gap: it plants a short session-start directive in
+each harness — a `SessionStart` hook in `~/.claude/settings.json` that
+runs `taskr skill nudge`, a marked block in `~/.codex/AGENTS.md` and
+`~/.config/opencode/AGENTS.md`, and an `alwaysApply` rule at
+`.cursor/rules/taskr.mdc` in the repository you run it from. Rerunning
+it is a no-op; the marked blocks are rewritten in place on upgrade, and
+everything else in those files is left alone.
 
 The skills ship inside the binary, so `taskr skill install` after an
 upgrade rewrites them in step with the verbs the binary actually has.
