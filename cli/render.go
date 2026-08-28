@@ -174,19 +174,24 @@ func RenderContext(v ContextView, actor string) string {
 	if len(v.Parked) > 0 {
 		fmt.Fprintf(&b, "\nParked sessions (%d, newest first):\n", len(v.Parked))
 		for _, s := range v.Parked {
-			if s.IssueRef != "" {
-				fmt.Fprintf(&b, "  %s — %s\n", s.IssueRef, s.IssueTitle)
-			} else if s.IssueID != "" {
-				// An older server sends the raw issue id and nothing else;
-				// the uuid is less than a ref but better than a hole.
-				fmt.Fprintf(&b, "  issue %s on %s\n", s.IssueID, s.Machine)
-			} else {
-				fmt.Fprintf(&b, "  session %s on %s\n", s.ID, s.Machine)
+			// One line per row: what it was, why it stopped, how long ago.
+			// Orientation is printed at every session start, and rendering
+			// resume notes here measured ~1,400 tokens of mostly stale
+			// detail (TSK-220) — which row deserves detail is the caller's
+			// call, made through taskr show or taskr start. The note still
+			// travels in --json and in the resume packet, where a reader
+			// has already committed to the row.
+			head := s.IssueRef + " — " + s.IssueTitle
+			if s.IssueRef == "" {
+				if s.IssueID != "" {
+					// An older server sends the raw issue id and nothing
+					// else; the uuid is less than a ref but better than a
+					// hole.
+					head = "issue " + s.IssueID + " on " + s.Machine
+				} else {
+					head = "session " + s.ID + " on " + s.Machine
+				}
 			}
-			// The scan line: when it stopped, why, and whether this row is
-			// standing in for siblings on the same issue. Recency leads
-			// because "was I doing this recently" is the first question a
-			// reader asks of a parked row.
 			var parts []string
 			if age := relativeAge(time.Now(), s.ParkedAt); age != "" {
 				parts = append(parts, "parked "+age)
@@ -198,14 +203,9 @@ func RenderContext(v ContextView, actor string) string {
 				parts = append(parts, fmt.Sprintf("also parked: %d", s.AlsoParked))
 			}
 			if len(parts) > 0 {
-				fmt.Fprintf(&b, "      %s\n", strings.Join(parts, " · "))
-			}
-			if s.ResumeNote != "" {
-				fmt.Fprintf(&b, "      next: %s\n", indent(s.ResumeNote))
-			} else if s.Reason != "" || s.ParkedAt != "" {
-				// A park without a note is a hole in the record — say so
-				// rather than let an absent line read as "nothing to do".
-				fmt.Fprintf(&b, "      (no resume note — see `taskr timeline`)\n")
+				fmt.Fprintf(&b, "  %s (%s)\n", head, strings.Join(parts, " · "))
+			} else {
+				fmt.Fprintf(&b, "  %s\n", head)
 			}
 		}
 	}
