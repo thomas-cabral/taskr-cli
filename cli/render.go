@@ -6,6 +6,7 @@ import (
 	"io"
 	"strings"
 	"text/tabwriter"
+	"time"
 )
 
 // RenderResumePacket is the prose the resume packet becomes for a human —
@@ -171,13 +172,41 @@ func RenderContext(v ContextView, actor string) string {
 	}
 
 	if len(v.Parked) > 0 {
-		fmt.Fprintf(&b, "\nParked sessions (%d):\n", len(v.Parked))
+		fmt.Fprintf(&b, "\nParked sessions (%d, newest first):\n", len(v.Parked))
 		for _, s := range v.Parked {
-			fmt.Fprintf(&b, "  %s on %s", s.ID, s.Machine)
-			if s.IssueID != "" {
-				fmt.Fprintf(&b, " (issue %s)", s.IssueID)
+			if s.IssueRef != "" {
+				fmt.Fprintf(&b, "  %s — %s\n", s.IssueRef, s.IssueTitle)
+			} else if s.IssueID != "" {
+				// An older server sends the raw issue id and nothing else;
+				// the uuid is less than a ref but better than a hole.
+				fmt.Fprintf(&b, "  issue %s on %s\n", s.IssueID, s.Machine)
+			} else {
+				fmt.Fprintf(&b, "  session %s on %s\n", s.ID, s.Machine)
 			}
-			b.WriteString("\n")
+			// The scan line: when it stopped, why, and whether this row is
+			// standing in for siblings on the same issue. Recency leads
+			// because "was I doing this recently" is the first question a
+			// reader asks of a parked row.
+			var parts []string
+			if age := relativeAge(time.Now(), s.ParkedAt); age != "" {
+				parts = append(parts, "parked "+age)
+			}
+			if s.Reason != "" {
+				parts = append(parts, parkReason(s.Reason))
+			}
+			if s.AlsoParked > 0 {
+				parts = append(parts, fmt.Sprintf("also parked: %d", s.AlsoParked))
+			}
+			if len(parts) > 0 {
+				fmt.Fprintf(&b, "      %s\n", strings.Join(parts, " · "))
+			}
+			if s.ResumeNote != "" {
+				fmt.Fprintf(&b, "      next: %s\n", indent(s.ResumeNote))
+			} else if s.Reason != "" || s.ParkedAt != "" {
+				// A park without a note is a hole in the record — say so
+				// rather than let an absent line read as "nothing to do".
+				fmt.Fprintf(&b, "      (no resume note — see `taskr timeline`)\n")
+			}
 		}
 	}
 
@@ -300,6 +329,46 @@ func dateOf(ts string) string {
 		return ts[:10]
 	}
 	return ts
+}
+
+// relativeAge renders a wire timestamp as the age a reader acts on:
+// "just now", "45m ago", "3h ago", "2d ago", then the calendar date once
+// the days stop fitting on one line. now is a parameter so tests can fix
+// the clock; an empty or unparseable timestamp renders as no age at all —
+// a bad one must not crash a render that is otherwise useful.
+func relativeAge(now time.Time, ts string) string {
+	if ts == "" {
+		return ""
+	}
+	t, err := time.Parse(time.RFC3339Nano, ts)
+	if err != nil {
+		return ""
+	}
+	d := now.Sub(t)
+	switch {
+	case d < time.Minute:
+		return "just now"
+	case d < time.Hour:
+		return fmt.Sprintf("%dm ago", int(d.Minutes()))
+	case d < 24*time.Hour:
+		return fmt.Sprintf("%dh ago", int(d.Hours()))
+	case d < 30*24*time.Hour:
+		return fmt.Sprintf("%dd ago", int(d.Hours()/24))
+	}
+	return t.Format("Jan 2")
+}
+
+// parkReason says why work stopped in the reader's words. The tokens are
+// the API's reason codes; only the two that read as code get unwrapped,
+// the rest already speak for themselves.
+func parkReason(r string) string {
+	switch r {
+	case "done_for_now":
+		return "done for now"
+	case "context_exhausted":
+		return "context exhausted"
+	}
+	return r
 }
 
 // RenderIssue renders `taskr show`.
