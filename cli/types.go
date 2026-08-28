@@ -271,6 +271,9 @@ type ResumePacket struct {
 	LastPark      *ParkView     `json:"last_park,omitempty"`
 	PriorSessions []SessionView `json:"prior_sessions,omitempty"`
 	Documents     []DocumentRef `json:"documents,omitempty"`
+	// Catchup is how the work got here: the approaches already ruled out
+	// and a collapsed history of the sessions that did it.
+	Catchup *CatchupSection `json:"catchup,omitempty"`
 }
 
 // ProjectConventions carries a project's branch, commit, and PR conventions.
@@ -635,4 +638,116 @@ type PromoteResult struct {
 	TargetID  string `json:"target_id"`
 	TargetRef string `json:"target_ref,omitempty"`
 	Blocked   bool   `json:"blocked"`
+}
+
+// --- Catch-up (TSK-212) ---
+//
+// The wire shapes of GET /api/issues/{ref}/catchup. They mirror
+// internal/app/catchup.go on the server; the CLI decodes and renders, and
+// derives nothing of its own — a client that recomputed any of this would
+// be a second place for the elision rules to drift.
+
+// CatchupPacket is how an issue got from 0 to now, under a token budget.
+type CatchupPacket struct {
+	Ref      string          `json:"ref"`
+	Title    string          `json:"title"`
+	DeadEnds []DeadEnd       `json:"dead_ends,omitempty"`
+	Plan     []PlanLine      `json:"plan,omitempty"`
+	State    CatchupState    `json:"state"`
+	History  []SessionDigest `json:"history,omitempty"`
+	Evidence []Span          `json:"evidence,omitempty"`
+	Trail    *DecisionTrail  `json:"trail,omitempty"`
+	Budget   BudgetReport    `json:"budget"`
+}
+
+// CatchupSection is the catch-up as it rides inside a resume packet: only
+// the parts the packet does not already carry in fuller form.
+type CatchupSection struct {
+	DeadEnds []DeadEnd       `json:"dead_ends,omitempty"`
+	History  []SessionDigest `json:"history,omitempty"`
+	Budget   BudgetReport    `json:"budget"`
+}
+
+// CatchupState is where the issue stands right now. Branch and HeadSHA are
+// the LAST commit anyone recorded against it, which is not the same as the
+// issue's own snapshot and is the one a resuming agent should stand on.
+type CatchupState struct {
+	Status     string `json:"status"`
+	Kind       string `json:"kind"`
+	Priority   string `json:"priority"`
+	Resolution string `json:"resolution,omitempty"`
+	Progress   string `json:"progress,omitempty"`
+	Branch     string `json:"branch,omitempty"`
+	HeadSHA    string `json:"head_sha,omitempty"`
+}
+
+// DeadEnd is an approach the ledger already ruled out. Kind is "dropped",
+// "ruled_out" or "reopened".
+type DeadEnd struct {
+	Kind    string `json:"kind"`
+	Step    string `json:"step,omitempty"`
+	Reason  string `json:"reason,omitempty"`
+	Actor   string `json:"actor,omitempty"`
+	At      string `json:"at"`
+	HeadSHA string `json:"head_sha,omitempty"`
+}
+
+// PlanLine is one step that has not finished.
+type PlanLine struct {
+	Position int    `json:"position"`
+	Title    string `json:"title"`
+	Status   string `json:"status"`
+	Note     string `json:"note,omitempty"`
+}
+
+// SessionDigest is one session's work on one day, collapsed to a line.
+// Through and Sessions are set when consecutive days that did the same
+// thing were coalesced into one run.
+type SessionDigest struct {
+	SessionID string `json:"session_id,omitempty"`
+	Actor     string `json:"actor,omitempty"`
+	Date      string `json:"date"`
+	Through   string `json:"through,omitempty"`
+	Sessions  int    `json:"sessions,omitempty"`
+	Summary   string `json:"summary"`
+	HeadSHA   string `json:"head_sha,omitempty"`
+}
+
+// Span is one stretch of work on one branch, as the two commits that
+// bracket it. The server ships addresses and never diffs; git is local.
+type Span struct {
+	Repo   string `json:"repo"`
+	Branch string `json:"branch,omitempty"`
+	From   string `json:"from"`
+	To     string `json:"to"`
+	At     string `json:"at"`
+}
+
+// DecisionTrail is the --deep layer: why the work went the way it did.
+type DecisionTrail struct {
+	Comments  []CommentView `json:"comments,omitempty"`
+	Checks    []CheckView   `json:"checks,omitempty"`
+	Documents []DocumentRef `json:"documents,omitempty"`
+	Verdicts  []TriageNote  `json:"verdicts,omitempty"`
+}
+
+// TriageNote is one recorded verdict and the evidence behind it.
+type TriageNote struct {
+	Verdict     string `json:"verdict"`
+	Evidence    string `json:"evidence,omitempty"`
+	DuplicateOf string `json:"duplicate_of,omitempty"`
+	Actor       string `json:"actor,omitempty"`
+	At          string `json:"at"`
+}
+
+// BudgetReport is what the packet cost and what it left out.
+type BudgetReport struct {
+	Budget         int    `json:"budget"`
+	Estimated      int    `json:"estimated"`
+	ElidedSessions int    `json:"elided_sessions,omitempty"`
+	ElidedDeadEnds int    `json:"elided_dead_ends,omitempty"`
+	ElidedSteps    int    `json:"elided_steps,omitempty"`
+	ElidedSpans    int    `json:"elided_spans,omitempty"`
+	ElidedTrail    int    `json:"elided_trail,omitempty"`
+	Notice         string `json:"notice,omitempty"`
 }
