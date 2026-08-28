@@ -17,7 +17,7 @@ import (
 var completionCommands = []string{
 	"context", "next", "ls", "show", "new", "group", "relate", "unrelate",
 	"start", "park", "end", "close", "edit", "offload", "comment", "triage",
-	"check", "step", "timeline", "doc", "auth", "skill", "version",
+	"check", "step", "catchup", "timeline", "doc", "auth", "skill", "version",
 	"project", "completions",
 }
 
@@ -29,7 +29,7 @@ var completionCommands = []string{
 // ref, which a one-hook script cannot express), check run (wants a check
 // id), project and auth (want their own vocabularies).
 var refCommands = []string{
-	"show", "start", "close", "edit", "comment", "timeline", "doc", "triage",
+	"show", "start", "close", "edit", "comment", "catchup", "timeline", "doc", "triage",
 	"step", "check",
 }
 

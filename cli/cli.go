@@ -59,10 +59,12 @@ Usage:
   taskr step edit <ref> <pos|id> [--title <text>] [--body <text>]
   taskr step drop <ref> <pos|id> -m <reason>
   taskr step promote <ref> <pos|id> [--child|--check] [--no-block] [-m <reason>] [--title <text>]
+  taskr catchup <ref> [--budget N] [--deep]   how the work got here, budgeted
   taskr timeline <ref>                   the event ledger
   taskr doc <ref>                        documents linked to an issue
   taskr doc add <ref> -f <path> [-t spec|plan|note] [--title T]
   taskr doc show <id>                    print one document's body
+  taskr doc history <id>                 a document's revision history
   taskr auth login                       approve in a browser, or pipe a key in
   taskr auth status                      who your credential writes as, without writing
   taskr auth logout                      revoke the key server-side and forget it locally
@@ -221,6 +223,8 @@ func Run(args []string, stdout, stderr io.Writer, getenv func(string) string) in
 		run = func() error { return cmdComment(ctx, client, rest, stdout, stderr) }
 	case "triage":
 		run = func() error { return cmdTriage(ctx, client, rest, stdout, stderr, getenv) }
+	case "catchup":
+		run = func() error { return cmdCatchup(ctx, client, rest, stdout, stderr) }
 	case "timeline":
 		run = func() error { return cmdTimeline(ctx, client, rest, stdout, stderr) }
 	case "doc":
@@ -1740,6 +1744,38 @@ func cmdStepPromote(ctx context.Context, c *Client, args []string, stdout, stder
 	return nil
 }
 
+// cmdCatchup renders how an issue got from 0 to now, under a token budget.
+//
+// It is the cheap read `taskr timeline` is not: the ledger holds every
+// event and reconstructing the story from it costs an agent the whole
+// history one line at a time. This asks the server for the collapsed
+// version — dead ends first, then the plan, then what the sessions did —
+// and prints it. Nothing is derived here; the elision rules live in one
+// place, on the server, so the two surfaces cannot drift.
+func cmdCatchup(ctx context.Context, c *Client, args []string, stdout, stderr io.Writer) error {
+	fs := flag.NewFlagSet("catchup", flag.ContinueOnError)
+	fs.SetOutput(stderr)
+	jsonOut := fs.Bool("json", false, "output JSON")
+	deep := fs.Bool("deep", false, "add the decision trail: comments, checks, documents and triage verdicts")
+	budget := fs.Int("budget", 0, "token ceiling; 0 leaves it to the server's default for the layer")
+	positional, err := parseFlags(fs, args)
+	if err != nil {
+		return err
+	}
+	if len(positional) < 1 {
+		return fmt.Errorf("usage: taskr catchup <ref> [--budget N] [--deep]")
+	}
+	p, err := c.Catchup(ctx, positional[0], *budget, *deep)
+	if err != nil {
+		return err
+	}
+	if *jsonOut {
+		return printJSON(stdout, p)
+	}
+	RenderCatchup(stdout, p)
+	return nil
+}
+
 func cmdTimeline(ctx context.Context, c *Client, args []string, stdout, stderr io.Writer) error {
 	fs := flag.NewFlagSet("timeline", flag.ContinueOnError)
 	fs.SetOutput(stderr)
@@ -1814,6 +1850,8 @@ func runDoc(ctx context.Context, c *Client, args []string, stdin io.Reader, stdo
 			return cmdDocAdd(ctx, c, args[1:], stdin, stdout, stderr)
 		case "show":
 			return cmdDocShow(ctx, c, args[1:], stdout, stderr)
+		case "history":
+			return cmdDocHistory(ctx, c, args[1:], stdout, stderr)
 		}
 	}
 	return cmdDoc(ctx, c, args, stdout, stderr)
@@ -1916,6 +1954,32 @@ func cmdDocShow(ctx context.Context, c *Client, args []string, stdout, stderr io
 		return printJSON(stdout, v)
 	}
 	RenderDocument(stdout, v)
+	return nil
+}
+
+// cmdDocHistory lists a document's append-only revision history. The
+// projector has kept every revision since documents existed; before this
+// verb nothing read it back, so the diff summaries written with `doc add
+// --diff` were stored and never surfaced anywhere.
+func cmdDocHistory(ctx context.Context, c *Client, args []string, stdout, stderr io.Writer) error {
+	fs := flag.NewFlagSet("doc history", flag.ContinueOnError)
+	fs.SetOutput(stderr)
+	jsonOut := fs.Bool("json", false, "output JSON")
+	positional, err := parseFlags(fs, args)
+	if err != nil {
+		return err
+	}
+	if len(positional) < 1 {
+		return fmt.Errorf("usage: taskr doc history <id>")
+	}
+	rows, err := c.GetDocumentRevisions(ctx, positional[0])
+	if err != nil {
+		return err
+	}
+	if *jsonOut {
+		return printJSON(stdout, rows)
+	}
+	RenderDocumentRevisions(stdout, positional[0], rows)
 	return nil
 }
 
