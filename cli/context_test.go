@@ -56,10 +56,11 @@ func itoa(n int) string {
 	return string(d)
 }
 
-// TestContextParkedRowsShowThePark is the fix TSK-219 asks for: a parked
-// row reads as the work it stands for — ref, title, when it stopped, why,
-// and the note the next agent was left — not as a pair of opaque UUIDs.
-func TestContextParkedRowsShowThePark(t *testing.T) {
+// TestContextParkedRowsAreOneLiner is the budget TSK-220 puts orientation
+// under: a parked row answers what it was, why it stopped and how long
+// ago — on one line. The resume note is deliberately absent from the
+// human render; it travels in --json and the resume packet instead.
+func TestContextParkedRowsAreOneLiner(t *testing.T) {
 	parkedAt := time.Now().Add(-3 * time.Hour).UTC().Format("2006-01-02T15:04:05.999999999Z07:00")
 	v := ContextView{Parked: []SessionView{mustDecode[SessionView](t, parkedRow(
 		"01a045a6", "TSK-216", "Site copy: replace 'context runs out' framing", "done_for_now",
@@ -71,21 +72,28 @@ func TestContextParkedRowsShowThePark(t *testing.T) {
 		"TSK-216 — Site copy: replace 'context runs out' framing",
 		"parked 3h ago",
 		"done for now",
-		"next: Review and merge the PR, then close TSK-216.",
 	} {
 		if !strings.Contains(out, want) {
 			t.Errorf("render missing %q\noutput:\n%s", want, out)
 		}
 	}
+	for _, unwanted := range []string{"next:", "Review and merge the PR"} {
+		if strings.Contains(out, unwanted) {
+			t.Errorf("resume note leaked into the parked row (%q):\n%s", unwanted, out)
+		}
+	}
 	if strings.Contains(out, "01a045a6") {
 		t.Errorf("session uuid leaked into a row that has a ref:\n%s", out)
 	}
+	if rows := strings.Count(out, "TSK-216"); rows != 1 {
+		t.Errorf("row is not one line — ref appears %d times:\n%s", rows, out)
+	}
 }
 
-// TestContextParkedRowWithoutNoteSaysSo: a park that left no note is a hole
-// in the record, and an absent line would read as "nothing to do" — the
-// render names it instead.
-func TestContextParkedRowWithoutNoteSaysSo(t *testing.T) {
+// TestContextParkedRowShowsAlsoParked: the list is keyed by issue, so the
+// sibling count is the only place an older park stays visible — even in
+// the one-line budget.
+func TestContextParkedRowShowsAlsoParked(t *testing.T) {
 	parkedAt := time.Now().Add(-2 * 24 * time.Hour).UTC().Format("2006-01-02T15:04:05.999999999Z07:00")
 	v := ContextView{Parked: []SessionView{mustDecode[SessionView](t, parkedRow(
 		"01a0399d", "TSK-99", "Blocked on review", "blocked", "", parkedAt, 2,
@@ -96,7 +104,6 @@ func TestContextParkedRowWithoutNoteSaysSo(t *testing.T) {
 		"parked 2d ago",
 		"blocked",
 		"also parked: 2",
-		"(no resume note",
 	} {
 		if !strings.Contains(out, want) {
 			t.Errorf("render missing %q\noutput:\n%s", want, out)
