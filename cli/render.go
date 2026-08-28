@@ -686,6 +686,12 @@ func RenderCatchup(w io.Writer, p CatchupPacket) {
 
 	renderDeadEnds(w, p.DeadEnds)
 
+	// After the dead ends and before the plan, matching the order the
+	// server fills them in: what not to retry outranks what the task is.
+	if p.Description != "" {
+		fmt.Fprintf(w, "\n%s\n", indent(p.Description))
+	}
+
 	if len(p.Plan) > 0 {
 		fmt.Fprintf(w, "\nStill to do:\n")
 		for _, l := range p.Plan {
