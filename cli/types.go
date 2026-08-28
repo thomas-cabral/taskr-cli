@@ -649,15 +649,18 @@ type PromoteResult struct {
 
 // CatchupPacket is how an issue got from 0 to now, under a token budget.
 type CatchupPacket struct {
-	Ref      string          `json:"ref"`
-	Title    string          `json:"title"`
-	DeadEnds []DeadEnd       `json:"dead_ends,omitempty"`
-	Plan     []PlanLine      `json:"plan,omitempty"`
-	State    CatchupState    `json:"state"`
-	History  []SessionDigest `json:"history,omitempty"`
-	Evidence []Span          `json:"evidence,omitempty"`
-	Trail    *DecisionTrail  `json:"trail,omitempty"`
-	Budget   BudgetReport    `json:"budget"`
+	Ref   string `json:"ref"`
+	Title string `json:"title"`
+	// Description is the issue's brief. It is what lets a catch-up be
+	// started from on its own, instead of alongside `taskr show`.
+	Description string          `json:"description,omitempty"`
+	DeadEnds    []DeadEnd       `json:"dead_ends,omitempty"`
+	Plan        []PlanLine      `json:"plan,omitempty"`
+	State       CatchupState    `json:"state"`
+	History     []SessionDigest `json:"history,omitempty"`
+	Evidence    []Span          `json:"evidence,omitempty"`
+	Trail       *DecisionTrail  `json:"trail,omitempty"`
+	Budget      BudgetReport    `json:"budget"`
 }
 
 // CatchupSection is the catch-up as it rides inside a resume packet: only

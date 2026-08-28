@@ -13,6 +13,7 @@ import (
 
 const catchupBody = `{
   "ref":"TSK-212","title":"webhook retries drop on redelivery",
+  "description":"Redelivered webhooks lose their retry budget at deliver/webhook.go:212.",
   "dead_ends":[
     {"kind":"ruled_out","step":"2. try the webhook-first approach",
      "reason":"the signature is computed before the retry envelope exists",
@@ -295,5 +296,38 @@ func TestResumePacketWithoutACatchupIsUnchanged(t *testing.T) {
 	}
 	if !strings.Contains(got, "TSK-212") {
 		t.Errorf("packet did not render at all:\n%s", got)
+	}
+}
+
+// The brief is what lets `taskr catchup` be started from on its own
+// rather than alongside `taskr show` — if it does not render, the command
+// is a supplement instead of a substitute (TSK-228).
+func TestCatchupPrintsTheBriefAfterTheDeadEnds(t *testing.T) {
+	var seen url.Values
+	srv := catchupServer(t, catchupBody, &seen)
+	defer srv.Close()
+
+	got := runCatchup(t, srv, "TSK-212")
+	if !strings.Contains(got, "Redelivered webhooks lose their retry budget") {
+		t.Errorf("output does not carry the brief:\n%s", got)
+	}
+	ruled, brief, plan := strings.Index(got, "Already ruled out"),
+		strings.Index(got, "Redelivered webhooks"), strings.Index(got, "Still to do")
+	if !(ruled < brief && brief < plan) {
+		t.Errorf("brief out of order (ruled %d, brief %d, plan %d):\n%s", ruled, brief, plan, got)
+	}
+}
+
+// A packet without a brief renders without a hole where one would be.
+func TestCatchupWithoutABriefRendersCleanly(t *testing.T) {
+	var seen url.Values
+	srv := catchupServer(t, `{"ref":"TSK-9","title":"x",
+	  "state":{"status":"open","kind":"bug","priority":"low"},
+	  "budget":{"budget":2000,"estimated":40}}`, &seen)
+	defer srv.Close()
+
+	got := runCatchup(t, srv, "TSK-9")
+	if !strings.Contains(got, "TSK-9") || strings.Contains(got, "\n\n\n") {
+		t.Errorf("packet with no brief did not render cleanly:\n%q", got)
 	}
 }
