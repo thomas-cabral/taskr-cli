@@ -464,6 +464,37 @@ func RenderDocument(w io.Writer, v DocumentView) {
 	fmt.Fprintln(w, strings.TrimRight(v.Body, "\n"))
 }
 
+// RenderDocumentRevisions renders `taskr doc history`: one row per
+// revision, oldest first, so a reader can see how a spec reached the body
+// `doc show` prints. Revision one is the original body; a summary column
+// only shows when some revision carries one, mirroring how RenderDocument
+// omits counts that carry no information.
+func RenderDocumentRevisions(w io.Writer, docID string, rows []DocumentRevision) {
+	fmt.Fprintf(w, "%s — %d revision(s)\n", docID, len(rows))
+	fmt.Fprintln(w)
+	tw := tabwriter.NewWriter(w, 0, 2, 2, ' ', 0)
+	header := "REV\tSHA256\tAT"
+	hasSummaries := false
+	for _, r := range rows {
+		if r.DiffSummary != "" {
+			hasSummaries = true
+			break
+		}
+	}
+	if hasSummaries {
+		header += "\tWHAT CHANGED"
+	}
+	fmt.Fprintln(tw, header)
+	for _, r := range rows {
+		line := fmt.Sprintf("%d\t%s\t%s", r.Revision, r.SHA256[:12], dateOf(r.RevisedAt))
+		if hasSummaries {
+			line += "\t" + r.DiffSummary
+		}
+		fmt.Fprintln(tw, line)
+	}
+	tw.Flush()
+}
+
 // RenderProjects renders `taskr project ls`. It exists to answer one
 // question — does a project already cover where I'm standing — so each
 // project's repos and dirs are shown alongside its identity, not just its

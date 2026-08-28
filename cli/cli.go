@@ -63,6 +63,7 @@ Usage:
   taskr doc <ref>                        documents linked to an issue
   taskr doc add <ref> -f <path> [-t spec|plan|note] [--title T]
   taskr doc show <id>                    print one document's body
+  taskr doc history <id>                 a document's revision history
   taskr auth login                       approve in a browser, or pipe a key in
   taskr auth status                      who your credential writes as, without writing
   taskr auth logout                      revoke the key server-side and forget it locally
@@ -1814,6 +1815,8 @@ func runDoc(ctx context.Context, c *Client, args []string, stdin io.Reader, stdo
 			return cmdDocAdd(ctx, c, args[1:], stdin, stdout, stderr)
 		case "show":
 			return cmdDocShow(ctx, c, args[1:], stdout, stderr)
+		case "history":
+			return cmdDocHistory(ctx, c, args[1:], stdout, stderr)
 		}
 	}
 	return cmdDoc(ctx, c, args, stdout, stderr)
@@ -1916,6 +1919,32 @@ func cmdDocShow(ctx context.Context, c *Client, args []string, stdout, stderr io
 		return printJSON(stdout, v)
 	}
 	RenderDocument(stdout, v)
+	return nil
+}
+
+// cmdDocHistory lists a document's append-only revision history. The
+// projector has kept every revision since documents existed; before this
+// verb nothing read it back, so the diff summaries written with `doc add
+// --diff` were stored and never surfaced anywhere.
+func cmdDocHistory(ctx context.Context, c *Client, args []string, stdout, stderr io.Writer) error {
+	fs := flag.NewFlagSet("doc history", flag.ContinueOnError)
+	fs.SetOutput(stderr)
+	jsonOut := fs.Bool("json", false, "output JSON")
+	positional, err := parseFlags(fs, args)
+	if err != nil {
+		return err
+	}
+	if len(positional) < 1 {
+		return fmt.Errorf("usage: taskr doc history <id>")
+	}
+	rows, err := c.GetDocumentRevisions(ctx, positional[0])
+	if err != nil {
+		return err
+	}
+	if *jsonOut {
+		return printJSON(stdout, rows)
+	}
+	RenderDocumentRevisions(stdout, positional[0], rows)
 	return nil
 }
 

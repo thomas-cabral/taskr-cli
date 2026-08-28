@@ -370,6 +370,17 @@ type DocumentView struct {
 	LinkedIssues []string `json:"linked_issues,omitempty"`
 }
 
+// DocumentRevision is one row of a document's append-only history, for
+// `taskr doc history`. It carries metadata only — the body itself stays in
+// the blob store behind its sha256, and a list that inlined every past
+// body would be unreadable at exactly the moment it became useful.
+type DocumentRevision struct {
+	Revision    int    `json:"revision"`
+	SHA256      string `json:"sha256"`
+	DiffSummary string `json:"diff_summary,omitempty"`
+	RevisedAt   string `json:"revised_at"`
+}
+
 func (c *Client) UpsertDocument(ctx context.Context, in UpsertDocumentInput) (DocumentRef, error) {
 	var out DocumentRef
 	err := c.write(ctx, http.MethodPost, "/api/documents", in, &out)
@@ -380,6 +391,12 @@ func (c *Client) GetDocument(ctx context.Context, id string) (DocumentView, erro
 	var v DocumentView
 	err := c.get(ctx, "/api/documents/"+url.PathEscape(id), nil, &v)
 	return v, err
+}
+
+func (c *Client) GetDocumentRevisions(ctx context.Context, id string) ([]DocumentRevision, error) {
+	var rows []DocumentRevision
+	err := c.get(ctx, "/api/documents/"+url.PathEscape(id)+"/revisions", nil, &rows)
+	return rows, err
 }
 
 // UpdateIssueInput is the subset of PATCH /api/issues/{ref} the CLI sends.
