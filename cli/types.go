@@ -236,6 +236,18 @@ type SessionView struct {
 	Status         string `json:"status"`
 	StartedAt      string `json:"started_at"`
 	ResumeCommand  string `json:"resume_command,omitempty"`
+	// The fields below describe the park this row stands for, and are
+	// filled only for the parked list — the server sends them additively on
+	// the same type (no coordinated release), and a row rendered anywhere
+	// else has no park to describe.
+	IssueRef   string `json:"issue_ref,omitempty"`
+	IssueTitle string `json:"issue_title,omitempty"`
+	Reason     string `json:"reason,omitempty"`
+	ResumeNote string `json:"resume_note,omitempty"`
+	ParkedAt   string `json:"parked_at,omitempty"`
+	// AlsoParked counts the other sessions parked on this same issue; the
+	// list is keyed by issue, so this is how the older parks stay visible.
+	AlsoParked int `json:"also_parked,omitempty"`
 }
 
 // ParkView is why work stopped, and what to do next.
