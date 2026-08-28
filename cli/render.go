@@ -36,6 +36,12 @@ func RenderResumePacket(p ResumePacket) string {
 	}
 	b.WriteString("\n")
 
+	// Directly under what to do next, and above everything else, because
+	// the two answer the same question: the note says where to go, and the
+	// dead ends say which roads are already known to end. Anything printed
+	// between them is read after the agent has started deciding.
+	renderCatchupSection(&b, p.Catchup)
+
 	if iv.Snapshot != nil {
 		s := iv.Snapshot
 		fmt.Fprintf(&b, "Tree state (as of %s):\n", s.RecordedAt)
@@ -665,4 +671,182 @@ func RenderSimilar(w io.Writer, similar []Neighbor, hint string) {
 	if hint != "" {
 		fmt.Fprintf(w, "%s\n", hint)
 	}
+}
+
+// RenderCatchup prints `taskr catchup` for a human.
+//
+// Dead ends come first, before the state line and before the plan, which
+// is the same order the server fills the packet in and for the same
+// reason: they are the lines that stop an agent re-walking an approach a
+// previous session already paid to rule out. Everything else here is
+// context for them.
+func RenderCatchup(w io.Writer, p CatchupPacket) {
+	fmt.Fprintf(w, "%s — %s\n", p.Ref, p.Title)
+	renderCatchupState(w, p.State)
+
+	renderDeadEnds(w, p.DeadEnds)
+
+	if len(p.Plan) > 0 {
+		fmt.Fprintf(w, "\nStill to do:\n")
+		for _, l := range p.Plan {
+			marker := "○"
+			if l.Status == "in_progress" {
+				marker = "▸"
+			}
+			fmt.Fprintf(w, "  %d. %s %s\n", l.Position, marker, l.Title)
+			if l.Note != "" {
+				fmt.Fprintf(w, "        %s\n", indent(l.Note))
+			}
+		}
+	}
+
+	renderDigests(w, p.History)
+
+	if len(p.Evidence) > 0 {
+		// Printed as the git command rather than as two hashes: the point
+		// of shipping addresses instead of diffs is that the reader runs
+		// the diff, and a line they can paste is the shortest path to that.
+		// Command first, provenance behind a `#`, so the whole line pastes
+		// into a shell. Shipping addresses instead of diffs only pays off
+		// if the address is one paste from being an answer.
+		fmt.Fprintf(w, "\nWhat moved (run these yourself):\n")
+		for _, s := range p.Evidence {
+			fmt.Fprintf(w, "  git log %s..%s   # %s, %s\n", s.From, s.To, s.Repo, branchOrDetached(s.Branch))
+		}
+	}
+
+	renderTrail(w, p.Trail)
+
+	if p.Budget.Notice != "" {
+		fmt.Fprintf(w, "\n%s\n", p.Budget.Notice)
+	}
+}
+
+func renderCatchupState(w io.Writer, s CatchupState) {
+	fmt.Fprintf(w, "status: %s   priority: %s   kind: %s", s.Status, s.Priority, s.Kind)
+	if s.Progress != "" {
+		fmt.Fprintf(w, "   plan: %s", s.Progress)
+	}
+	fmt.Fprintln(w)
+	if s.HeadSHA != "" {
+		fmt.Fprintf(w, "last seen on %s @ %s\n", branchOrDetached(s.Branch), s.HeadSHA)
+	}
+	if s.Resolution != "" {
+		fmt.Fprintf(w, "resolution: %s\n", s.Resolution)
+	}
+}
+
+// renderDeadEnds is shared by `taskr catchup` and the resume packet, so the
+// most load-bearing block in either surface reads identically in both.
+func renderDeadEnds(w io.Writer, ends []DeadEnd) {
+	if len(ends) == 0 {
+		return
+	}
+	fmt.Fprintf(w, "\nAlready ruled out — do not retry %s:\n", plural(len(ends), "this", "these"))
+	for _, d := range ends {
+		what := d.Step
+		if what == "" {
+			what = deadEndKind(d.Kind)
+		}
+		fmt.Fprintf(w, "  ✗ %s\n", what)
+		if d.Reason != "" {
+			fmt.Fprintf(w, "      %s\n", indent(d.Reason))
+		}
+		if d.HeadSHA != "" {
+			fmt.Fprintf(w, "      at %s\n", d.HeadSHA)
+		}
+	}
+}
+
+// deadEndKind names a dead end that is not a step, so the line says what it
+// was rather than rendering blank.
+func deadEndKind(kind string) string {
+	switch kind {
+	case "reopened":
+		return "this was closed once and reopened"
+	case "dropped":
+		return "a dropped step"
+	case "ruled_out":
+		return "a ruled-out step"
+	}
+	return kind
+}
+
+func renderDigests(w io.Writer, rows []SessionDigest) {
+	if len(rows) == 0 {
+		return
+	}
+	fmt.Fprintf(w, "\nHow it got here:\n")
+	for _, d := range rows {
+		when := d.Date
+		if d.Through != "" {
+			when = fmt.Sprintf("%s..%s", d.Date, d.Through)
+		}
+		fmt.Fprintf(w, "  %s  %s", when, d.Summary)
+		if d.Sessions > 1 {
+			fmt.Fprintf(w, " (×%d sessions)", d.Sessions)
+		}
+		if d.HeadSHA != "" {
+			fmt.Fprintf(w, "  @ %s", d.HeadSHA)
+		}
+		fmt.Fprintln(w)
+	}
+}
+
+// renderTrail prints the --deep layer. It is the one part of a catch-up
+// that carries people's actual words, so it renders them whole rather than
+// truncating: a caller who asked for the decision trail asked for what was
+// said, and half a sentence is worse than a pointer.
+func renderTrail(w io.Writer, t *DecisionTrail) {
+	if t == nil {
+		return
+	}
+	for _, v := range t.Verdicts {
+		fmt.Fprintf(w, "\nTriaged %s", v.Verdict)
+		if v.DuplicateOf != "" {
+			fmt.Fprintf(w, " of %s", v.DuplicateOf)
+		}
+		fmt.Fprintf(w, " (%s)\n", dateOf(v.At))
+		if v.Evidence != "" {
+			fmt.Fprintf(w, "  %s\n", indent(v.Evidence))
+		}
+	}
+	if len(t.Checks) > 0 {
+		fmt.Fprintf(w, "\nChecks:\n")
+		for _, c := range t.Checks {
+			fmt.Fprintf(w, "  [%s] %s\n", c.Status, c.Title)
+			if c.Expect != "" {
+				fmt.Fprintf(w, "      expect: %s\n", indent(c.Expect))
+			}
+		}
+	}
+	if len(t.Documents) > 0 {
+		fmt.Fprintf(w, "\nDocuments (read with `taskr doc show <id>`):\n")
+		for _, d := range t.Documents {
+			fmt.Fprintf(w, "  [%s] %s (%s)\n", d.Type, d.Title, d.ID)
+		}
+	}
+	if len(t.Comments) > 0 {
+		fmt.Fprintf(w, "\nComments:\n")
+		for _, c := range t.Comments {
+			fmt.Fprintf(w, "  %s (%s): %s\n", c.Actor, dateOf(c.CreatedAt), indent(c.Body))
+		}
+	}
+}
+
+// renderCatchupSection prints the catch-up that rides inside a resume
+// packet. It is deliberately shorter than `taskr catchup`: the packet
+// already prints the status, the tree state and the plan above it, so
+// repeating them would spend a resuming agent's tokens saying the same
+// thing twice.
+func renderCatchupSection(b *strings.Builder, c *CatchupSection) {
+	if c == nil {
+		return
+	}
+	renderDeadEnds(b, c.DeadEnds)
+	renderDigests(b, c.History)
+	if c.Budget.Notice != "" {
+		fmt.Fprintf(b, "\n%s\n", c.Budget.Notice)
+	}
+	b.WriteString("\n")
 }

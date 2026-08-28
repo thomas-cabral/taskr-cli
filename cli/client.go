@@ -11,6 +11,7 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"strconv"
 	"strings"
 )
 
@@ -292,6 +293,25 @@ func (c *Client) ListDocuments(ctx context.Context, ref string) ([]DocumentRef, 
 func (c *Client) Timeline(ctx context.Context, ref string) ([]TimelineEntry, error) {
 	var v []TimelineEntry
 	err := c.get(ctx, "/api/issues/"+url.PathEscape(ref)+"/timeline", nil, &v)
+	return v, err
+}
+
+// Catchup returns how an issue got from 0 to now, under a token budget.
+//
+// budget of 0 leaves the ceiling to the server, which has a default per
+// layer and clamps anything absurd rather than refusing it — the CLI does
+// not second-guess either, so a caller who typed a silly number still gets
+// a packet.
+func (c *Client) Catchup(ctx context.Context, ref string, budget int, deep bool) (CatchupPacket, error) {
+	q := url.Values{}
+	if budget > 0 {
+		q.Set("budget", strconv.Itoa(budget))
+	}
+	if deep {
+		q.Set("deep", "1")
+	}
+	var v CatchupPacket
+	err := c.get(ctx, "/api/issues/"+url.PathEscape(ref)+"/catchup", q, &v)
 	return v, err
 }
 

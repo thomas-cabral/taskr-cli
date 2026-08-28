@@ -14,6 +14,8 @@ parseable output — the default is human-readable.
 
 1. **Orient** — `taskr context` or `taskr next`: where am I, what's ready.
 2. **Pick** — `taskr show <ref>` to read it, `taskr start <ref>` to begin.
+   The resume packet carries the dead ends; `taskr catchup <ref>` is the
+   same read on an issue you have not started.
 3. **Work** — do the task, keeping the plan on the issue with `taskr step`
    so it survives you, not just the session — and moving each step as you
    reach it, not after.
@@ -197,6 +199,34 @@ human partner runs: `taskr-admin key actor <id> agent` (TSK-26, TSK-38).
 Noticed at orientation this costs nothing; noticed afterwards it means a
 ledger with the wrong name on every write you made.
 
+## Say what you ruled out
+
+`taskr catchup <ref>` renders how an issue got from 0 to now — the state,
+the open plan, and, first, the approaches already ruled out. `taskr start`
+prints the same dead-ends block inside the resume packet, so a resuming
+agent gets it without asking.
+
+Read-time compression cannot recover what nobody wrote. The block is built
+from exactly two things you type while working:
+
+- **`taskr step drop <ref> <pos> -m "<why>"`** — the reason is the whole
+  value. "wrong approach" tells the next agent nothing; "the signature is
+  computed before the retry envelope exists, so every redelivery re-signs
+  against a window that has already closed" stops them re-walking a day.
+- **`taskr step done <ref> <pos> -m "ruled out ..."`** — a completion note
+  beginning **`ruled out`** is carried into the dead-ends block verbatim.
+  That prefix is the whole convention. Use it whenever finishing a step
+  also eliminated an approach, which is most of the time a spike ends.
+
+Everything else in the catch-up is derived. These two lines are not, and
+an issue where nobody wrote them has a catch-up that can only say what
+happened, never what not to try again.
+
+`taskr catchup --deep` adds the decision trail — comments, checks,
+documents, and triage verdicts with their evidence. Reach for it when the
+default read leaves a real question, not by default: the point of the
+default is that it is cheap enough to run on every resume.
+
 ## How to park
 
 The resume note is the first thing the next agent — possibly you, later —
@@ -249,6 +279,7 @@ Every command below also accepts `--json`.
 | `taskr triage [--all]` | what needs a verdict, and why: `new`, `rot` or `expired` |
 | `taskr triage <ref>` | does this one issue need a verdict |
 | `taskr triage <ref> <verdict> [-e evidence] [-d dup-ref]` | record a verdict |
+| `taskr catchup <ref> [--budget N] [--deep]` | how the work got here: dead ends first, then plan, state and a collapsed history |
 | `taskr timeline <ref>` | the event ledger |
 | `taskr check add <ref> -m <procedure> [--expect T] [--human]` | record a done-when that cannot be verified yet |
 | `taskr check ls <ref>` | an issue's checks and their state |
@@ -298,7 +329,8 @@ can actually carry — a plan in your head or in a scratch file does not
 survive the session that wrote it. `taskr step add` when you know the shape
 of the work, `step start`/`step done` as you move, `step drop -m` when a
 step turns out to be wrong (say why: the next reader needs to know it was
-considered, not forgotten). When a step is really its own issue, `step
+considered, not forgotten, and the reason is what lands in the dead-ends
+block — see "Say what you ruled out"). When a step is really its own issue, `step
 promote` makes it one rather than leaving a plan item nobody can rank.
 
 **A step is what you can finish before you stop.** That is the whole rule,
