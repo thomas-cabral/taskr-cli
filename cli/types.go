@@ -26,6 +26,13 @@ type Neighbor struct {
 	Status  string  `json:"status"`
 	Project string  `json:"project,omitempty"`
 	Score   float64 `json:"score"`
+	// Held is the live session on this neighbour, if any. It is the
+	// difference between "something like this exists" and "somebody is
+	// writing it right now" — the second is why you stop and comment on
+	// theirs instead of starting yours.
+	Held *Holder `json:"held,omitempty"`
+	// AlsoHeld counts further live sessions beyond Held.
+	AlsoHeld int `json:"also_held,omitempty"`
 }
 
 // CreatedIssue is POST /api/issues' response: the ref plus, when the
@@ -210,6 +217,11 @@ type RelatedIssue struct {
 	Status string `json:"status"`
 	Type   string `json:"type"`
 	Depth  int    `json:"depth"`
+	// Held is the live session on this related issue. On a blocker it is
+	// the answer to "how long until I am unblocked".
+	Held *Holder `json:"held,omitempty"`
+	// AlsoHeld counts further live sessions beyond Held.
+	AlsoHeld int `json:"also_held,omitempty"`
 }
 
 // GraphContext is the neighbourhood around one issue.
@@ -279,6 +291,11 @@ type ResumePacket struct {
 	// Catchup is how the work got here: the approaches already ruled out
 	// and a collapsed history of the sessions that did it.
 	Catchup *CatchupSection `json:"catchup,omitempty"`
+	// Similar is the semantic neighbourhood: open issues whose text
+	// resembles this one with no edge explaining why. The server has always
+	// sent it; it is decoded here now because a twin somebody is live on is
+	// worth seeing before the first line of code, not after.
+	Similar []Neighbor `json:"similar,omitempty"`
 	// Holders are teammates live on this issue right now. Non-empty only
 	// after a deliberate `start --join` — any other start would have been
 	// refused — and then it is the point of having joined: who you are now
