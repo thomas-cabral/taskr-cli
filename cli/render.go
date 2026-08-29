@@ -421,6 +421,122 @@ func heldSuffix(now time.Time, h *Holder, alsoHeld int) string {
 	return out
 }
 
+// RenderTeam prints `taskr team`: who is on what, in the four blocks a
+// person actually asks about.
+//
+// It is the one render in this CLI aimed at a human rather than an agent, and
+// it breaks the first-person rule on purpose — every other surface subtracts
+// other people's work, and this one is nothing but. That is why it is a verb
+// somebody types and never a block that appears inside `context` or `next`.
+func RenderTeam(w io.Writer, now time.Time, v TeamView) {
+	empty := len(v.OnItNow) == 0 && len(v.GoneQuiet) == 0 &&
+		len(v.WaitingForPickup) == 0 && len(v.RecentParks) == 0
+	if empty {
+		fmt.Fprintln(w, "Nobody is working right now, and nothing is waiting to be picked up.")
+		return
+	}
+
+	if len(v.OnItNow) > 0 {
+		fmt.Fprintf(w, "On it now (%d):\n", len(v.OnItNow))
+		for _, s := range v.OnItNow {
+			fmt.Fprintf(w, "  %s — %s\n", teamIssue(s.IssueRef, s.IssueTitle), teamWho(s.Email, s.Machine, s.Own))
+			fmt.Fprintf(w, "      started %s · seen %s · %s\n",
+				relativeAge(now, s.StartedAt), relativeAge(now, s.LastSeen), teamWhere(s))
+		}
+	}
+
+	// Shown rather than hidden: a stale session is a park without a note.
+	// Somebody stopped and said nothing, and the useful response is to ask.
+	if len(v.GoneQuiet) > 0 {
+		fmt.Fprintf(w, "\nGone quiet (%d):\n", len(v.GoneQuiet))
+		for _, s := range v.GoneQuiet {
+			fmt.Fprintf(w, "  %s — %s · last seen %s · %s\n",
+				teamIssue(s.IssueRef, s.IssueTitle), teamWho(s.Email, s.Machine, s.Own),
+				relativeAge(now, s.LastSeen), s.Machine)
+		}
+	}
+
+	// The handoff queue, and the only block anyone reads to decide what to
+	// pick up. The note is the payload; the auto-park warning above it is
+	// what stops a mechanical note being read as a human one.
+	if len(v.WaitingForPickup) > 0 {
+		fmt.Fprintf(w, "\nWaiting for pickup (%d):\n", len(v.WaitingForPickup))
+		for _, p := range v.WaitingForPickup {
+			fmt.Fprintf(w, "  %s — %s · %s %s",
+				teamIssue(p.IssueRef, p.IssueTitle), teamWho(p.Email, p.Machine, p.Own),
+				parkReason(p.Reason), relativeAge(now, p.ParkedAt))
+			if p.Branch != "" {
+				fmt.Fprintf(w, " · %s", p.Branch)
+			}
+			fmt.Fprintln(w)
+			if p.Auto {
+				fmt.Fprintf(w, "      Nobody wrote this note — the harness parked it as the session exited")
+				if p.DirtyFiles > 0 {
+					fmt.Fprintf(w, ", leaving %d uncommitted file%s on %s",
+						p.DirtyFiles, plural(p.DirtyFiles, "", "s"), p.Machine)
+				}
+				fmt.Fprintln(w, ".")
+			}
+			if p.ResumeNote != "" {
+				fmt.Fprintf(w, "      %s\n", indent(p.ResumeNote))
+			}
+		}
+	}
+
+	if len(v.RecentParks) > 0 {
+		fmt.Fprintf(w, "\nRecent parks (%d):\n", len(v.RecentParks))
+		for _, p := range v.RecentParks {
+			fmt.Fprintf(w, "  %s — %s · %s %s\n",
+				teamIssue(p.IssueRef, p.IssueTitle), teamWho(p.Email, p.Machine, p.Own),
+				parkReason(p.Reason), relativeAge(now, p.ParkedAt))
+		}
+	}
+}
+
+// teamWho names a row's owner. Your own rows say "you": this surface shows
+// you yourself among the others, and reading your own address back at you is
+// how a board stops feeling like it is about people.
+func teamWho(email, machine string, own bool) string {
+	if own {
+		return "you"
+	}
+	if email != "" {
+		return email
+	}
+	// No email means the server could not trace the session to a person — one
+	// opened before identity was recorded, or a holder outside the reading
+	// org. The machine is what every session said about itself before any of
+	// this existed, and it is still worth more than dropping the row.
+	return machine
+}
+
+func teamIssue(ref, title string) string {
+	if ref == "" {
+		return "(no issue in focus)"
+	}
+	if title == "" {
+		return ref
+	}
+	return ref + " " + title
+}
+
+// teamWhere is the second line of a live row: where the work is happening.
+func teamWhere(s TeamSession) string {
+	parts := []string{}
+	if s.Branch != "" {
+		parts = append(parts, s.Branch+" @ "+s.Machine)
+	} else {
+		parts = append(parts, s.Machine)
+	}
+	if s.Agent != "" {
+		parts = append(parts, s.Agent)
+	}
+	if s.CWD != "" {
+		parts = append(parts, s.CWD)
+	}
+	return strings.Join(parts, " · ")
+}
+
 // RenderTriageQueue renders `taskr triage` with no verdict: what needs a
 // look, and why. The WHY column says the reason in words a reader acts on
 // rather than the wire token — the same labels the app's triage screen

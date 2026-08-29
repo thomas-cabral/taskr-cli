@@ -225,6 +225,20 @@ func (c *Client) Next(ctx context.Context, machine string, loc Locator, all, unt
 	return v, err
 }
 
+// TeamStatus is who is on what across the org, scoped the way Next is: the
+// locator picks the project, all widens back out.
+func (c *Client) TeamStatus(ctx context.Context, loc Locator, all bool) (TeamView, error) {
+	q := url.Values{}
+	setIf(q, "remote_url", loc.RemoteURL)
+	setIf(q, "subpath", loc.Subpath)
+	if all {
+		q.Set("all", "1")
+	}
+	var v TeamView
+	err := c.get(ctx, "/api/team", q, &v)
+	return v, err
+}
+
 // TriageQueue lists the open issues that need a fresh verdict — never
 // triaged, verdict expired, or the repo moved under them — scoped to the
 // caller's project unless all is set. ref narrows it to one issue: an empty

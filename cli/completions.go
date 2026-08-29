@@ -15,7 +15,7 @@ import (
 // TestCompletionCommandsStayInSync holds this slice against the help text
 // instead of trusting whoever adds the next verb to remember all three.
 var completionCommands = []string{
-	"context", "next", "ls", "show", "new", "group", "relate", "unrelate",
+	"context", "next", "team", "ls", "show", "new", "group", "relate", "unrelate",
 	"start", "park", "touch", "end", "close", "edit", "offload", "comment", "triage",
 	"check", "step", "catchup", "timeline", "doc", "auth", "skill", "version",
 	"project", "completions",
