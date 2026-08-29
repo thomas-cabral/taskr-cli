@@ -279,6 +279,16 @@ type ResumePacket struct {
 	// Catchup is how the work got here: the approaches already ruled out
 	// and a collapsed history of the sessions that did it.
 	Catchup *CatchupSection `json:"catchup,omitempty"`
+	// Holders are teammates live on this issue right now. Non-empty only
+	// after a deliberate `start --join` — any other start would have been
+	// refused — and then it is the point of having joined: who you are now
+	// working alongside.
+	Holders []Holder `json:"holders,omitempty"`
+	// StaleHolders were on this issue and fell out of the claim window
+	// without parking. They refuse nothing, but they mean a branch on
+	// another machine that may carry uncommitted work nobody wrote a note
+	// about.
+	StaleHolders []Holder `json:"stale_holders,omitempty"`
 }
 
 // ProjectConventions carries a project's branch, commit, and PR conventions.
@@ -347,6 +357,24 @@ type ContextView struct {
 	Project       *ProjectView   `json:"project,omitempty"`
 	SetupHint     *SetupHint     `json:"setup_hint,omitempty"`
 	Ambiguous     *AmbiguousHint `json:"ambiguous,omitempty"`
+	// ClaimLost is set when this session went quiet long enough to fall out
+	// of the claim window and a teammate has since picked its issue up. See
+	// its type: it is the one thing a returning agent has to read before it
+	// types anything.
+	ClaimLost *ClaimLost `json:"claim_lost,omitempty"`
+}
+
+// ClaimLost says the issue this session thinks it is working belongs to
+// somebody else now.
+//
+// Nobody did anything wrong to cause it. A session goes quiet, its claim
+// expires — no event, no reaper, just a predicate that stopped being true —
+// and the issue rejoins the ready pool where a teammate picks it up. The
+// returning agent is the only one who does not know yet.
+type ClaimLost struct {
+	IssueRef string   `json:"issue_ref"`
+	StaleAt  string   `json:"stale_at"`
+	Holders  []Holder `json:"holders"`
 }
 
 // UntouchedPlan is the server's report that a plan is not being kept: the
@@ -537,6 +565,16 @@ type PendingCheck struct {
 type PendingChecksBody struct {
 	Error         string             `json:"error"`
 	PendingChecks []PendingCheckItem `json:"pending_checks"`
+}
+
+// IssueHeldBody is the 409 a start gets when a teammate's session is live on
+// the issue. It carries the holders for the same reason PendingChecksBody
+// carries the checks: the refusal has to name who to ask for a handoff, and
+// finding that out with a second request would be a request made only
+// because the first one threw the answer away.
+type IssueHeldBody struct {
+	Error   string   `json:"error"`
+	Holders []Holder `json:"holders"`
 }
 
 // PendingCheckItem is one pending check as the 409 names it.
