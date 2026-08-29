@@ -21,7 +21,8 @@ const usage = `taskr — track issues, specs and plans across sessions.
 
 Usage:
   taskr context                          where am I, what was I doing
-  taskr next [--untriaged]               ranked candidates; only triaged ones unless --untriaged
+  taskr next [--untriaged] [--held]      ranked candidates; only triaged ones unless --untriaged,
+                                          and --held also lists what a teammate is already on
   taskr ls [-s status] [-q query]        list issues
   taskr show <ref> [--context]           issue detail
   taskr new <title> [-k kind] [-p priority] [-m description] [--parent GROUP]
@@ -496,18 +497,31 @@ func cmdNext(ctx context.Context, c *Client, args []string, stdout, stderr io.Wr
 	fs.SetOutput(stderr)
 	all := fs.Bool("all", false, "every project, not just the one resolved from where you're standing")
 	untriaged := fs.Bool("untriaged", false, "include issues with no actionable verdict, ranked below the triaged ones")
+	// --held, not --all: --all already means every project, and overloading
+	// it would make "everything" mean two unrelated things depending on
+	// which surface you typed it into.
+	held := fs.Bool("held", false, "also show the issues a teammate's live session is on")
 	jsonOut := fs.Bool("json", false, "output JSON")
 	if _, err := parseFlags(fs, args); err != nil {
 		return err
 	}
 	loc := LocatorFrom(getenv, cwd())
-	rows, err := c.Next(ctx, machine, loc, *all, *untriaged)
+
+	// The human render always asks for held rows, because the one line it
+	// prints about them has to be counted from something — and counting
+	// them costs the same request either way. --json does NOT, unless the
+	// reader asked: JSON is a machine contract, and quietly appending rows
+	// a script would read as ready work is how a script starts duplicating
+	// somebody.
+	rows, err := c.Next(ctx, machine, loc, *all, *untriaged, *held || !*jsonOut)
 	if err != nil {
 		return err
 	}
 	if *jsonOut {
 		return printJSON(stdout, rows)
 	}
+	ready, heldRows := splitHeld(rows)
+	rows = ready
 	// An empty queue is ambiguous in a way that matters: no issues, all of
 	// them done, all blocked, and "forty filed but none triaged" all print
 	// as the same nothing. Only the last one is a false negative, and it is
@@ -517,7 +531,7 @@ func cmdNext(ctx context.Context, c *Client, args []string, stdout, stderr io.Wr
 		// No count: the pool comes back capped at the same limit the real
 		// queue uses, so any number printed here would be the cap rather
 		// than the census, and a wrong number is worse than none.
-		if pool, err := c.Next(ctx, machine, loc, *all, true); err == nil && len(pool) > 0 {
+		if pool, err := c.Next(ctx, machine, loc, *all, true, false); err == nil && len(pool) > 0 {
 			fmt.Fprintln(stdout,
 				"No triaged candidates, but this project has ready work with no triage verdict.\n"+
 					"`taskr triage` lists what needs a verdict and why; `taskr triage <ref> actionable` promotes one into this queue; `taskr next --untriaged` ranks it anyway.")
@@ -525,6 +539,7 @@ func cmdNext(ctx context.Context, c *Client, args []string, stdout, stderr io.Wr
 		}
 	}
 	RenderCandidates(stdout, rows)
+	RenderHeld(stdout, time.Now(), heldRows, *held)
 	// Pending human-run checks are work only a person can move; the agent
 	// queue above never ranks them. Errors are swallowed: this is a
 	// courtesy block after the real answer, same rule as liveSessionOn.

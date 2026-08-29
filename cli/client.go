@@ -202,7 +202,11 @@ func (c *Client) Context(ctx context.Context, in ContextQuery) (ContextView, err
 // Next returns the ranked candidate list, scoped to the caller's project
 // unless all is set. untriaged drops the actionable-verdict gate, which is
 // how the caller sees work that has been filed but not yet triaged.
-func (c *Client) Next(ctx context.Context, machine string, loc Locator, all, untriaged bool) ([]Candidate, error) {
+// Next ranks the ready pool. held asks the server to append the issues a
+// teammate's live session holds, after the ranked page and each carrying its
+// holders — so one request answers both "what should I pick up" and "what is
+// somebody else already on", and asking never costs the page a slot.
+func (c *Client) Next(ctx context.Context, machine string, loc Locator, all, untriaged, held bool) ([]Candidate, error) {
 	q := url.Values{}
 	setIf(q, "machine", machine)
 	setIf(q, "remote_url", loc.RemoteURL)
@@ -212,6 +216,9 @@ func (c *Client) Next(ctx context.Context, machine string, loc Locator, all, unt
 	}
 	if untriaged {
 		q.Set("include_untriaged", "1")
+	}
+	if held {
+		q.Set("held", "1")
 	}
 	var v []Candidate
 	err := c.get(ctx, "/api/next", q, &v)

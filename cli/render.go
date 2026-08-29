@@ -274,6 +274,71 @@ func RenderCandidates(w io.Writer, rows []Candidate) {
 	tw.Flush()
 }
 
+// splitHeld separates the ranked page from the rows the server appended
+// because a teammate's live session is on them. Held rows carry holders;
+// page rows cannot, since having no live holder is what put them in the page.
+func splitHeld(rows []Candidate) (ready, held []Candidate) {
+	for _, r := range rows {
+		if len(r.Held) > 0 {
+			held = append(held, r)
+			continue
+		}
+		ready = append(ready, r)
+	}
+	return ready, held
+}
+
+// RenderHeld says what a teammate is already on — one line when the reader
+// did not ask, the rows themselves when they did.
+//
+// The rule this obeys is the one every teams surface has to: your queue gets
+// QUIETER, not louder. Held issues have already been subtracted from the page
+// above; this is the single line that keeps the subtraction honest, and it
+// prints only when the count is non-zero. For one person it is always zero —
+// your own sessions are never somebody else's claim — so a solo contributor
+// never sees this at all, which is the point.
+func RenderHeld(w io.Writer, now time.Time, held []Candidate, expand bool) {
+	if len(held) == 0 {
+		return
+	}
+	if !expand {
+		noun := "issues"
+		verb := "are"
+		if len(held) == 1 {
+			noun, verb = "issue", "is"
+		}
+		fmt.Fprintf(w, "\n%d ready %s %s held by teammates (next --held)\n", len(held), noun, verb)
+		return
+	}
+	fmt.Fprintf(w, "\nHeld by teammates (%d):\n", len(held))
+	for _, c := range held {
+		fmt.Fprintf(w, "  %s — %s\n      %s\n", c.Ref, c.Title, holderLine(now, c.Held))
+	}
+}
+
+// holderLine names who is on an issue, since when, and from where. A holder
+// the server could not name — someone outside the reading org, or a session
+// older than identity — renders as its machine and agent rather than being
+// dropped: "somebody on laptop" is still the fact the reader needs.
+func holderLine(now time.Time, hs []Holder) string {
+	parts := make([]string, 0, len(hs))
+	for _, h := range hs {
+		who := h.Email
+		if who == "" {
+			who = h.Machine + " · " + h.Agent
+		}
+		line := "held by " + who
+		if age := relativeAge(now, h.StartedAt); age != "" {
+			line += " · started " + age
+		}
+		if h.Email != "" && h.Machine != "" {
+			line += " · " + h.Machine
+		}
+		parts = append(parts, line)
+	}
+	return strings.Join(parts, "; ")
+}
+
 // RenderTriageQueue renders `taskr triage` with no verdict: what needs a
 // look, and why. The WHY column says the reason in words a reader acts on
 // rather than the wire token — the same labels the app's triage screen

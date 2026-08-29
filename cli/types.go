@@ -371,6 +371,31 @@ type Candidate struct {
 	Priority string   `json:"priority"`
 	Score    float64  `json:"score"`
 	Reasons  []string `json:"reasons"`
+	// Held is who is live on this issue, and it is set only on the rows the
+	// server appends after the ranked page. A row in the page itself has no
+	// live holder by construction — that is why it is offered — so a
+	// non-empty Held is exactly the marker that says "this one is not for
+	// you to start".
+	Held []Holder `json:"held,omitempty"`
+}
+
+// Holder is one live session standing on an issue: who is on it, from where,
+// and since when.
+//
+// Email is empty when the server could not name the person — a session
+// opened before identity was recorded, or a holder who is not a member of
+// the reading org. A holder without a name is still a holder, so the render
+// falls back to the machine rather than dropping the row.
+type Holder struct {
+	SessionID string `json:"session_id"`
+	UserID    string `json:"user_id,omitempty"`
+	Email     string `json:"email,omitempty"`
+	Machine   string `json:"machine"`
+	Agent     string `json:"agent"`
+	CWD       string `json:"cwd,omitempty"`
+	StartedAt string `json:"started_at"`
+	LastSeen  string `json:"last_seen"`
+	Own       bool   `json:"own"`
 }
 
 // TriageCandidate is one open issue that needs a fresh verdict, and why.
