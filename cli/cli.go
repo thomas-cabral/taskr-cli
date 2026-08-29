@@ -35,6 +35,8 @@ Usage:
                                           PARENT_OF/CHILD_OF: use taskr group add/rm instead
   taskr start <ref>                      start or resume work; prints the resume packet
   taskr park -m <note> [-r reason]       stop work, naming the next action
+  taskr park --auto                      park mechanically on the way out; for a SessionEnd hook
+  taskr touch                            say this session is still alive; for a Stop hook
   taskr end [-r reason]                  close out the current session
   taskr close <ref> [-r resolution]      finish the ISSUE — end closes the session
   taskr edit <ref> [--title T] [--desc TEXT] [--clear-desc] [--priority P]
@@ -210,7 +212,9 @@ func Run(args []string, stdout, stderr io.Writer, getenv func(string) string) in
 	case "start":
 		run = func() error { return cmdStart(ctx, client, rest, stdout, stderr, machine, session) }
 	case "park":
-		run = func() error { return cmdPark(ctx, client, rest, stdout, stderr, machine, session, getenv) }
+		run = func() error { return cmdPark(ctx, client, rest, stdout, stderr, machine, session, getenv, hookStdin()) }
+	case "touch":
+		run = func() error { return cmdTouch(ctx, client, rest, stdout, stderr, machine, session, hookStdin()) }
 	case "end":
 		run = func() error { return cmdEnd(ctx, client, rest, stdout, stderr, machine, session) }
 	case "close":
@@ -684,14 +688,26 @@ func cmdStart(ctx context.Context, c *Client, args []string, stdout, stderr io.W
 	return nil
 }
 
-func cmdPark(ctx context.Context, c *Client, args []string, stdout, stderr io.Writer, machine, agentSession string, getenv func(string) string) error {
+func cmdPark(ctx context.Context, c *Client, args []string, stdout, stderr io.Writer, machine, agentSession string, getenv func(string) string, stdin io.Reader) error {
 	fs := flag.NewFlagSet("park", flag.ContinueOnError)
 	fs.SetOutput(stderr)
 	note := fs.String("m", "", "resume note — the next concrete action")
 	reason := fs.String("r", "", "park reason")
+	auto := fs.Bool("auto", false, "park mechanically, for a harness SessionEnd hook")
+	verbose := fs.Bool("v", false, "with --auto: report what happened, for debugging a hook by hand")
 	jsonOut := fs.Bool("json", false, "output JSON")
 	if _, err := parseFlags(fs, args); err != nil {
 		return err
+	}
+	// --auto is a different command wearing park's name: no note to write,
+	// nothing to warn about, and no failure a harness could act on. It is
+	// spelled as a flag because what it produces IS a park, and a second
+	// verb would invite someone to reach for it by hand.
+	if *auto {
+		if *note != "" {
+			return fmt.Errorf("taskr park --auto composes its own note; drop -m")
+		}
+		return autoPark(ctx, c, stdout, stderr, machine, agentSession, getenv, stdin, *verbose)
 	}
 	if *note == "" {
 		return fmt.Errorf("usage: taskr park -m <note> [-r reason]")

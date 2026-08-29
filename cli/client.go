@@ -531,6 +531,11 @@ type ParkWorkInput struct {
 	Reason     string            `json:"reason,omitempty"`
 	ResumeNote string            `json:"resume_note,omitempty"`
 	Snapshot   *GitSnapshotInput `json:"git_snapshot,omitempty"`
+	// Auto marks a park the harness made on the way out rather than one a
+	// model or a human decided to make. The server records it on the event
+	// and hands it back on the next start, so a resume note nobody wrote is
+	// read as the mechanical thing it is.
+	Auto bool `json:"auto,omitempty"`
 }
 
 func (c *Client) ParkWork(ctx context.Context, in ParkWorkInput) error {
@@ -545,6 +550,26 @@ type EndWorkInput struct {
 
 func (c *Client) EndWork(ctx context.Context, in EndWorkInput) error {
 	return c.write(ctx, http.MethodPost, "/api/work/end", in, nil)
+}
+
+// TouchWorkInput is the wire shape POST /api/work/touch accepts. It names a
+// session and says nothing about the work: touch is liveness only.
+//
+// The CLI always sends the machine-and-agent form. It is one request — the
+// server resolves which session that pair opened — where naming the session
+// id would mean reading GET /api/context first, on every turn, purely to
+// learn an id. SessionID is here because the endpoint accepts it.
+type TouchWorkInput struct {
+	SessionID      string `json:"session_id,omitempty"`
+	Machine        string `json:"machine,omitempty"`
+	AgentSessionID string `json:"agent_session_id,omitempty"`
+}
+
+// Touch refreshes a session's last_seen. It is what the harness hooks call
+// on every turn, so it is the one write in this client with no rendering,
+// no result and nothing for a caller to decide.
+func (c *Client) Touch(ctx context.Context, in TouchWorkInput) error {
+	return c.write(ctx, http.MethodPost, "/api/work/touch", in, nil)
 }
 
 // OffloadInput is the wire shape POST /api/offload accepts.
