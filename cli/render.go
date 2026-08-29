@@ -90,6 +90,15 @@ func RenderResumePacket(p ResumePacket) string {
 		fmt.Fprintf(&b, "Related issues:\n%s\n", rel)
 	}
 
+	// After the typed edges, and for the same reason they come before it:
+	// an edge is a fact the ledger vouches for, a suggestion is a guess to
+	// verify. Both now say whether somebody is on the issue, which is the
+	// thing worth knowing before the first line of code rather than after.
+	if len(p.Similar) > 0 {
+		RenderSimilar(&b, p.Similar, "")
+		b.WriteString("\n")
+	}
+
 	if len(p.PriorSessions) > 0 {
 		b.WriteString("Prior sessions on this issue:\n")
 		for _, s := range p.PriorSessions {
@@ -122,8 +131,9 @@ func renderGraphSummary(g GraphContext) string {
 			return
 		}
 		fmt.Fprintf(&b, "  %s:\n", label)
+		now := time.Now()
 		for _, r := range rows {
-			fmt.Fprintf(&b, "    %s %s (%s)\n", r.Ref, r.Title, r.Status)
+			fmt.Fprintf(&b, "    %s %s (%s)%s\n", r.Ref, r.Title, r.Status, heldSuffix(now, r.Held, r.AlsoHeld))
 		}
 	}
 	writeRel("blocks", g.Blocks)
@@ -385,6 +395,32 @@ func machineOr(h Holder, fallback string) string {
 	return fallback
 }
 
+// heldSuffix is the one-clause annotation every neighbour surface appends
+// when somebody is live on the issue being suggested: " · held by alice@… 2h
+// ago". Empty when nobody is, which for one person working alone is always —
+// the same first-person rule the queue's held line obeys.
+//
+// It is a suffix rather than a column because it is a fact ABOUT the
+// suggestion, not another suggestion: the reader has already decided whether
+// the row is worth looking at by the time they reach it.
+func heldSuffix(now time.Time, h *Holder, alsoHeld int) string {
+	if h == nil {
+		return ""
+	}
+	who := h.Email
+	if who == "" {
+		who = h.Machine + " · " + h.Agent
+	}
+	out := " · held by " + who
+	if age := relativeAge(now, h.LastSeen); age != "" {
+		out += " " + age
+	}
+	if alsoHeld > 0 {
+		out += fmt.Sprintf(" (+%d more)", alsoHeld)
+	}
+	return out
+}
+
 // RenderTriageQueue renders `taskr triage` with no verdict: what needs a
 // look, and why. The WHY column says the reason in words a reader acts on
 // rather than the wire token — the same labels the app's triage screen
@@ -426,7 +462,16 @@ func twinCell(n *Neighbor) string {
 	if n == nil {
 		return ""
 	}
-	return fmt.Sprintf("%.2f %s", n.Score, n.Ref)
+	// A held twin is the strongest duplicate signal there is — not "these
+	// two look alike" but "somebody is writing the other one right now" —
+	// so the column says so. Compactly: the queue is a table, and the
+	// person's name belongs in `taskr triage <ref>`, where the twin is
+	// rendered in full.
+	held := ""
+	if n.Held != nil {
+		held = " · held"
+	}
+	return fmt.Sprintf("%.2f %s%s", n.Score, n.Ref, held)
 }
 
 func triageWhy(r TriageCandidate) string {
@@ -809,8 +854,9 @@ func RenderSimilar(w io.Writer, similar []Neighbor, hint string) {
 		return
 	}
 	fmt.Fprintf(w, "Similar open issues:\n")
+	now := time.Now()
 	for _, n := range similar {
-		fmt.Fprintf(w, "  %.2f  %-9s %s\n", n.Score, n.Ref, n.Title)
+		fmt.Fprintf(w, "  %.2f  %-9s %s%s\n", n.Score, n.Ref, n.Title, heldSuffix(now, n.Held, n.AlsoHeld))
 	}
 	if hint != "" {
 		fmt.Fprintf(w, "%s\n", hint)
