@@ -260,6 +260,11 @@ type ParkView struct {
 	ResumeNote    string `json:"resume_note,omitempty"`
 	ParkedAt      string `json:"parked_at"`
 	ResumeCommand string `json:"resume_command,omitempty"`
+	// Auto says the harness parked this on the way out — nobody decided to
+	// stop, and the note under it was composed from the tree rather than
+	// written. It changes how the note should be read, so `start` says so
+	// before printing it.
+	Auto bool `json:"auto,omitempty"`
 }
 
 // ResumePacket is everything a cold agent needs in a single response — the

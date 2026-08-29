@@ -328,3 +328,96 @@ func TestSkillNudgePrintsTheDirective(t *testing.T) {
 		t.Fatalf("nudge does not mention taskr context:\n%s", stdout.String())
 	}
 }
+
+// The liveness hooks are the point of TSK-201: the model cannot be relied on
+// to say it is still there, so the harness says it. All four events are
+// planted by the one command a user already runs on every upgrade.
+func TestEnforcePlantsTheLivenessHooks(t *testing.T) {
+	home := t.TempDir()
+	t.Chdir(t.TempDir())
+
+	if _, stderr, code := runEnforce(t, homeEnv(home)); code != 0 {
+		t.Fatalf("enforce exited %d, stderr: %s", code, stderr)
+	}
+	claude, _, _ := enforcedPaths(home)
+	raw, err := os.ReadFile(claude)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var settings struct {
+		Hooks map[string][]struct {
+			Hooks []struct {
+				Type    string `json:"type"`
+				Command string `json:"command"`
+			} `json:"hooks"`
+		} `json:"hooks"`
+	}
+	if err := json.Unmarshal(raw, &settings); err != nil {
+		t.Fatalf("settings are not valid JSON after enforce: %v", err)
+	}
+
+	want := map[string]string{
+		"SessionStart":     "taskr skill nudge",
+		"Stop":             "taskr touch",
+		"UserPromptSubmit": "taskr touch",
+		"SessionEnd":       "taskr park --auto",
+	}
+	for event, command := range want {
+		entries, ok := settings.Hooks[event]
+		if !ok {
+			t.Errorf("no %s hook planted:\n%s", event, raw)
+			continue
+		}
+		found := ""
+		for _, e := range entries {
+			for _, h := range e.Hooks {
+				if strings.Contains(h.Command, command) {
+					found = h.Command
+				}
+			}
+		}
+		if found == "" {
+			t.Errorf("%s hook does not run %q:\n%s", event, command, raw)
+			continue
+		}
+		// A hook that fails is a hook that fails on every turn, for as long
+		// as taskr is unreachable or gone from PATH. The guard is what keeps
+		// an outage out of the user's session.
+		if !strings.HasSuffix(found, "2>/dev/null || true") {
+			t.Errorf("%s command %q is not guarded — an outage would surface in every session", event, found)
+		}
+	}
+}
+
+// Half-installed is the state every upgrade passes through: the nudge is
+// already there from an older binary and the liveness hooks are not. Enforce
+// has to add what is missing without duplicating what is not.
+func TestEnforceAddsMissingHooksToAnExistingNudge(t *testing.T) {
+	home := t.TempDir()
+	t.Chdir(t.TempDir())
+	claude, _, _ := enforcedPaths(home)
+	seed := `{"hooks":{"SessionStart":[{"hooks":[{"type":"command","command":"taskr skill nudge 2>/dev/null || true"}]}]}}`
+	if err := os.MkdirAll(filepath.Dir(claude), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(claude, []byte(seed), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, stderr, code := runEnforce(t, homeEnv(home)); code != 0 {
+		t.Fatalf("enforce exited %d, stderr: %s", code, stderr)
+	}
+	raw, err := os.ReadFile(claude)
+	if err != nil {
+		t.Fatal(err)
+	}
+	text := string(raw)
+	if n := strings.Count(text, "taskr skill nudge"); n != 1 {
+		t.Errorf("nudge appears %d times, want 1 — enforce duplicated a hook that was already there:\n%s", n, text)
+	}
+	for _, want := range []string{"taskr touch", "taskr park --auto"} {
+		if !strings.Contains(text, want) {
+			t.Errorf("enforce did not add %q to a settings file that already had the nudge:\n%s", want, text)
+		}
+	}
+}

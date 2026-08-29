@@ -303,7 +303,7 @@ Every command below also accepts `--json`.
 | `taskr auth status` | who your credential writes as, without writing anything |
 | `taskr auth logout` | revoke the key server-side and forget it locally; works offline, warning when revocation could not happen |
 | `taskr skill install [--dir D] [--dry-run]` | write these skills where your harness reads them |
-| `taskr skill enforce [--dry-run]` | plant a session-start nudge in each harness so agents load them |
+| `taskr skill enforce [--dry-run]` | plant the session-start nudge, and Claude Code's liveness hooks, in each harness |
 | `taskr version` | which commit this binary was built from, and whether it matches your checkout |
 
 `kind`: bug, feature, task, chore, spike, question, group.
@@ -442,7 +442,13 @@ installed skill has never heard of, and `taskr skill install` fixes it.
 session-start nudge in each harness (a Claude Code hook, marked blocks in
 the Codex and opencode AGENTS.md files, a Cursor rule in the current
 repo) so a fresh session is told to orient with `taskr context` instead
-of being left to discover the skill by its description.
+of being left to discover the skill by its description. In Claude Code it
+also plants three lifecycle hooks you never run yourself: `taskr touch` on
+Stop and UserPromptSubmit, saying the session is still alive, and `taskr
+park --auto` on SessionEnd, which parks whatever you did not. They are
+silent, they never fail, and they exist because remembering is not a thing
+to leave to a model — your own `park -m` still carries the meaning, and the
+auto-park is only the floor under it.
 
 ## What taskr does not do
 

@@ -23,6 +23,14 @@ func RenderResumePacket(p ResumePacket) string {
 
 	if p.LastPark != nil {
 		fmt.Fprintf(&b, "Why work stopped: %s (parked %s)\n", p.LastPark.Reason, p.LastPark.ParkedAt)
+		// Said BEFORE the note, not after it: an auto-park's note is
+		// mechanically true and says nothing about why the work stopped or
+		// what to do next, and a reader who takes it for a human handoff
+		// will trust a sentence nobody meant.
+		if p.LastPark.Auto {
+			b.WriteString("Nobody wrote this note — the harness parked the session as it exited.\n" +
+				"Read the diff on the branch below before trusting where this stopped.\n")
+		}
 		if p.LastPark.ResumeNote != "" {
 			fmt.Fprintf(&b, "What to do next:\n  %s\n", indent(p.LastPark.ResumeNote))
 		} else {

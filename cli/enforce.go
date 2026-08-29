@@ -44,6 +44,35 @@ const (
 // session.
 const nudgeCommand = "taskr skill nudge 2>/dev/null || true"
 
+// claudeHooks is every hook enforce plants, and what each is for.
+//
+// The nudge is orientation: it fires once, at the start, and asks the model
+// to load the skill. The other three are liveness, and they exist because
+// the model cannot be relied on to remember — Stop and UserPromptSubmit say
+// the pair is still here, SessionEnd parks what nobody parked. Together they
+// are what lets the claim TTL be short: it then only has to cover a crash, a
+// kill -9 or a closed lid, which is the one thing no hook fires for.
+//
+// Every command ends in `2>/dev/null || true` because a hook that fails is a
+// hook that fails on every turn: taskr being unreachable, unauthenticated or
+// simply absent must be invisible from inside a session. The verbs themselves
+// already exit 0 on everything; this is the belt to that pair of braces, for
+// the machine where the binary has been removed and the hook has not.
+//
+// Each command reads the harness's hook JSON from stdin, which is where the
+// session id comes from: the hook shell is not guaranteed to carry
+// CLAUDE_CODE_SESSION_ID, and without the payload a touch would fall back to
+// the parent pid and keep the wrong session alive.
+var claudeHooks = []struct {
+	Event   string
+	Command string
+}{
+	{"SessionStart", nudgeCommand},
+	{"Stop", "taskr touch 2>/dev/null || true"},
+	{"UserPromptSubmit", "taskr touch 2>/dev/null || true"},
+	{"SessionEnd", "taskr park --auto 2>/dev/null || true"},
+}
+
 // enforceResult is one shim written for one harness, and what happened.
 type enforceResult struct {
 	Target string `json:"target"`
@@ -70,11 +99,12 @@ func cmdSkillEnforce(args []string, stdout, stderr io.Writer, getenv func(string
 		results = append(results, enforceResult{Target: target, Path: path, Status: status})
 	}
 
-	status, err := enforceClaudeHook(filepath.Join(home, ".claude", "settings.json"), *dryRun)
+	claudePath := filepath.Join(home, ".claude", "settings.json")
+	status, err := enforceClaudeHooks(claudePath, *dryRun)
 	if err != nil {
 		return err
 	}
-	add("claude-code", filepath.Join(home, ".claude", "settings.json"), status)
+	add("claude-code", claudePath, status)
 
 	codexPath := filepath.Join(home, ".codex", "AGENTS.md")
 	if status, err = enforceMarkedBlock(codexPath, *dryRun); err != nil {
@@ -118,12 +148,16 @@ func cmdSkillNudge(stdout io.Writer) error {
 	return err
 }
 
-// enforceClaudeHook merges one SessionStart hook into Claude Code's user
-// settings. The file is the user's — the merge adds exactly one entry,
-// preserves everything else, and refuses a file it cannot parse rather
-// than "fixing" it: a clobbered settings.json costs the user every hook
-// and permission rule they had.
-func enforceClaudeHook(path string, dryRun bool) (string, error) {
+// enforceClaudeHooks merges taskr's hooks into Claude Code's user settings,
+// one entry per event, adding only what is missing.
+//
+// The file is the user's — the merge preserves everything else and refuses a
+// file it cannot parse rather than "fixing" it: a clobbered settings.json
+// costs the user every hook and permission rule they had. For the same
+// reason a hook is matched by its exact command string, so a user who edited
+// taskr's entry keeps their edit instead of getting a duplicate planted next
+// to it.
+func enforceClaudeHooks(path string, dryRun bool) (string, error) {
 	settings := map[string]any{}
 	raw, err := os.ReadFile(path)
 	existed := err == nil
@@ -143,24 +177,25 @@ func enforceClaudeHook(path string, dryRun bool) (string, error) {
 		hooks = map[string]any{}
 		settings["hooks"] = hooks
 	}
-	starts, ok := hooks["SessionStart"].([]any)
-	if !ok {
-		if _, present := hooks["SessionStart"]; present {
-			return "", fmt.Errorf("%s has a \"SessionStart\" entry that is not an array — refusing to rewrite it", path)
-		}
-	}
-	for _, entry := range starts {
-		m, ok := entry.(map[string]any)
+
+	changed := false
+	for _, h := range claudeHooks {
+		entries, ok := hooks[h.Event].([]any)
 		if !ok {
-			continue
-		}
-		inner, _ := m["hooks"].([]any)
-		for _, h := range inner {
-			hm, ok := h.(map[string]any)
-			if ok && hm["command"] == nudgeCommand {
-				return "unchanged", nil
+			if _, present := hooks[h.Event]; present {
+				return "", fmt.Errorf("%s has a \"%s\" entry that is not an array — refusing to rewrite it", path, h.Event)
 			}
 		}
+		if claudeHookPresent(entries, h.Command) {
+			continue
+		}
+		hooks[h.Event] = append(entries, map[string]any{
+			"hooks": []any{map[string]any{"type": "command", "command": h.Command}},
+		})
+		changed = true
+	}
+	if !changed {
+		return "unchanged", nil
 	}
 
 	status := "updated"
@@ -171,9 +206,6 @@ func enforceClaudeHook(path string, dryRun bool) (string, error) {
 		return "would " + map[string]string{"updated": "update", "installed": "install"}[status], nil
 	}
 
-	hooks["SessionStart"] = append(starts, map[string]any{
-		"hooks": []any{map[string]any{"type": "command", "command": nudgeCommand}},
-	})
 	out, err := json.MarshalIndent(settings, "", "  ")
 	if err != nil {
 		return "", err
@@ -185,6 +217,26 @@ func enforceClaudeHook(path string, dryRun bool) (string, error) {
 		return "", err
 	}
 	return status, nil
+}
+
+// claudeHookPresent reports whether one of Claude Code's hook entries already
+// runs command. The shape is nested — a list of matchers, each with its own
+// list of hooks — and anything in it that is not the shape this expects is
+// skipped rather than rewritten, since it is the user's file and not taskr's.
+func claudeHookPresent(entries []any, command string) bool {
+	for _, entry := range entries {
+		m, ok := entry.(map[string]any)
+		if !ok {
+			continue
+		}
+		inner, _ := m["hooks"].([]any)
+		for _, h := range inner {
+			if hm, ok := h.(map[string]any); ok && hm["command"] == command {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 // enforceMarkedBlock puts the directive between the taskr markers in an
