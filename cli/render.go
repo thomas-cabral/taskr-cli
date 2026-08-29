@@ -42,6 +42,7 @@ func RenderResumePacket(p ResumePacket) string {
 	} else {
 		b.WriteString("This is a fresh start — no prior park on this issue.\n")
 	}
+	renderPacketHolders(&b, time.Now(), p)
 	b.WriteString("\n")
 
 	// Directly under what to do next, and above everything else, because
@@ -177,6 +178,10 @@ func RenderContext(v ContextView, actor string) string {
 			}
 		}
 		b.WriteString("\n")
+		// Said first, above the plan and everything else: if the issue has
+		// moved to somebody else, nothing further in this view is a
+		// description of work this session still owns.
+		renderClaimLost(&b, v.ClaimLost)
 		// Orientation is where an agent decides what it is doing next, so
 		// it is where a plan nobody has kept gets said — under the session
 		// it belongs to, before anything else competes for attention.
@@ -339,6 +344,47 @@ func holderLine(now time.Time, hs []Holder) string {
 	return strings.Join(parts, "; ")
 }
 
+// renderPacketHolders says who else is standing on this issue, live or
+// decayed. Both blocks are silent for one person working alone, which is the
+// first-person rule every teams surface obeys: your own sessions are never
+// somebody else's claim, so a solo contributor never sees either line.
+//
+// The live block only appears after `start --join`, since any other start on
+// a held issue was refused before it got here — and a join that says nothing
+// about who you joined is the one thing joining was for.
+//
+// The stale block is the more important of the two. A decayed session is not
+// a holder and refuses nothing, but it means somebody was here and stopped
+// without parking: there may be uncommitted work on a branch on another
+// machine, and no note anywhere saying so.
+func renderPacketHolders(b *strings.Builder, now time.Time, p ResumePacket) {
+	if len(p.Holders) > 0 {
+		fmt.Fprintf(b, "\nWorking alongside: %s\n", holderLine(now, p.Holders))
+		b.WriteString("Their session continues — nothing was taken. Say what you are touching before you touch it.\n")
+	}
+	for _, h := range p.StaleHolders {
+		who := h.Email
+		if who == "" {
+			who = h.Machine + " · " + h.Agent
+		}
+		line := fmt.Sprintf("\n%s's session on this went stale", who)
+		if age := relativeAge(now, h.LastSeen); age != "" {
+			line += " " + age
+		}
+		fmt.Fprintf(b, "%s — it stopped without parking, so a branch on %s may hold work nobody wrote a note about.\n",
+			line, machineOr(h, "another machine"))
+	}
+}
+
+// machineOr names where a holder was working, falling back when the row does
+// not say.
+func machineOr(h Holder, fallback string) string {
+	if h.Machine != "" {
+		return h.Machine
+	}
+	return fallback
+}
+
 // RenderTriageQueue renders `taskr triage` with no verdict: what needs a
 // look, and why. The WHY column says the reason in words a reader acts on
 // rather than the wire token — the same labels the app's triage screen
@@ -415,6 +461,31 @@ func dateOf(ts string) string {
 // the days stop fitting on one line. now is a parameter so tests can fix
 // the clock; an empty or unparseable timestamp renders as no age at all —
 // a bad one must not crash a render that is otherwise useful.
+// renderClaimLost warns a returning session that its issue is somebody
+// else's now. It prints only when both halves are true — this session went
+// quiet AND a teammate picked the issue up — because a warning that fires
+// every time a session is merely idle is one agents learn to skip past.
+//
+// It does not tell the reader what to do, deliberately. Whether to ask for
+// the work back, join it, or pick something else is a conversation between
+// two people, and the useful thing taskr can do is make sure the second one
+// knows the first exists.
+func renderClaimLost(b *strings.Builder, cl *ClaimLost) {
+	if cl == nil || len(cl.Holders) == 0 {
+		return
+	}
+	who := make([]string, 0, len(cl.Holders))
+	for _, h := range cl.Holders {
+		if h.Email != "" {
+			who = append(who, h.Email)
+			continue
+		}
+		who = append(who, h.Machine+" · "+h.Agent)
+	}
+	fmt.Fprintf(b, "  This session went quiet at %s and its claim lapsed; %s is now held by %s.\n",
+		cl.StaleAt, cl.IssueRef, strings.Join(who, ", "))
+}
+
 func relativeAge(now time.Time, ts string) string {
 	if ts == "" {
 		return ""

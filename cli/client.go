@@ -527,6 +527,11 @@ type StartWorkInput struct {
 	Agent          string `json:"agent,omitempty"`
 	AgentSessionID string `json:"agent_session_id,omitempty"`
 	CWD            string `json:"cwd,omitempty"`
+	// Join opens a session on an issue a teammate is live on instead of
+	// being refused. Nothing is stolen — the holder's session continues —
+	// and both show in `team`. It is a flag so that working alongside
+	// somebody is deliberate and on the record, not so that it is hard.
+	Join bool `json:"join,omitempty"`
 }
 
 func (c *Client) StartWork(ctx context.Context, in StartWorkInput) (ResumePacket, error) {

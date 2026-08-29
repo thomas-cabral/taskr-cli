@@ -34,7 +34,8 @@ Usage:
   taskr unrelate <ref> <type> <target-ref>
                                           remove a relationship written by relate
                                           PARENT_OF/CHILD_OF: use taskr group add/rm instead
-  taskr start <ref>                      start or resume work; prints the resume packet
+  taskr start <ref> [--join]             start or resume work; prints the resume packet
+                                          --join starts anyway when a teammate is live on it
   taskr park -m <note> [-r reason]       stop work, naming the next action
   taskr park --auto                      park mechanically on the way out; for a SessionEnd hook
   taskr touch                            say this session is still alive; for a Stop hook
@@ -693,6 +694,7 @@ func cmdStart(ctx context.Context, c *Client, args []string, stdout, stderr io.W
 	fs := flag.NewFlagSet("start", flag.ContinueOnError)
 	fs.SetOutput(stderr)
 	jsonOut := fs.Bool("json", false, "output JSON")
+	join := fs.Bool("join", false, "start even though a teammate is live on this issue")
 	positional, err := parseFlags(fs, args)
 	if err != nil {
 		return err
@@ -702,9 +704,28 @@ func cmdStart(ctx context.Context, c *Client, args []string, stdout, stderr io.W
 	}
 	packet, err := c.StartWork(ctx, StartWorkInput{
 		Issue: positional[0], Machine: machine, CWD: cwd(),
-		Agent: agentCLI, AgentSessionID: session,
+		Agent: agentCLI, AgentSessionID: session, Join: *join,
 	})
 	if err != nil {
+		// A refusal names the person, not the condition. What the reader
+		// does next is talk to somebody — so the message spends its lines
+		// on who and where, and offers the two real answers: ask for the
+		// work, or say out loud that you are taking it too.
+		var apiErr *APIError
+		if errors.As(err, &apiErr) && apiErr.Status == http.StatusConflict {
+			var body IssueHeldBody
+			if json.Unmarshal(apiErr.Body, &body) == nil && len(body.Holders) > 0 {
+				ref := positional[0]
+				fmt.Fprintf(stderr, "%s is %s.\n", ref, holderLine(time.Now(), body.Holders))
+				for _, h := range body.Holders {
+					if h.CWD != "" {
+						fmt.Fprintf(stderr, "  in %s\n", h.CWD)
+					}
+				}
+				fmt.Fprintf(stderr, "Ask for `taskr park -r handoff`, or `taskr start %s --join` to work alongside.\n", ref)
+				return fmt.Errorf("start refused: %s is held", ref)
+			}
+		}
 		return err
 	}
 	if *jsonOut {
