@@ -227,6 +227,48 @@ documents, and triage verdicts with their evidence. Reach for it when the
 default read leaves a real question, not by default: the point of the
 default is that it is cheap enough to run on every resume.
 
+## Working alongside other people
+
+Most installs are one person. Everything below is silent for them, which is
+the rule it obeys rather than an exception to it: **every surface answers in
+the first person.** `next` subtracts what a teammate is live on, `context`
+describes your session, `show` describes the issue — none of them turns into
+a status board. When there is nobody else, none of these lines ever print.
+
+An **active session is a claim** on its issue. Not a lock and not a field
+somebody sets: it is a live session, which means one seen recently. A session
+that goes quiet stops holding its issue with no event, no reaper and nothing
+to clean up — decay is a predicate, read when somebody asks. That is why
+`taskr touch` exists and why the harness hooks fire it; you never run it
+yourself.
+
+What that means while you work:
+
+- **A held twin after `new` or `offload`** — a `Similar open issues:` row
+  reading `· held by alice@… 2h ago` — means somebody is writing that issue
+  RIGHT NOW. Do not start yours. `taskr relate <yours> DUPLICATE_OF <theirs>`
+  and comment on theirs with what you found.
+- **A refused `start`** means a teammate's live session is on it. Report the
+  holder and what taskr suggested to your human, and stop. **Never pass
+  `--join` on your own initiative** — it is the answer to a conversation two
+  people already had, not a way past an obstacle.
+- **A handoff is `park -r handoff`** with a resume note naming the next
+  action and `branch @ sha`. That note is the entire packet the next person
+  gets; `taskr team` lists handoffs as what is waiting for pickup, and a
+  handoff with a vague note is one nobody picks up.
+- **An auto-park is a floor, not a park.** The SessionEnd hook parks what you
+  did not, with a note composed mechanically from the tree — it says where
+  the work was and never why. If you are still there to write a note, write
+  one. `park -m` before you stop is still the rule.
+- **`taskr team` is for humans.** It is the one surface that is deliberately
+  not first-person, and you do not need it: `context` and `next` already know
+  what you need to know. Do not run it to "check on" anybody.
+
+A stale holder is not a holder. Starting an issue somebody left quiet is
+allowed and normal — the packet says whose session went stale and when,
+because a decayed session means a branch on another machine that may carry
+uncommitted work nobody wrote a note about. Read that line before you push.
+
 ## How to park
 
 The resume note is the first thing the next agent — possibly you, later —
@@ -256,6 +298,11 @@ Always pass `-r <reason>`: `done_for_now`, `blocked`, `interrupted`,
 `context_exhausted`, or `handoff`. It's how `taskr context` and `taskr
 next` tell "pick this back up any time" apart from "actually stuck."
 
+`handoff` is the one with a second reader: `taskr team` lists handoff parks
+as **waiting for pickup**, so on a team it is not a synonym for
+`done_for_now` — it says somebody else should take this, and the note is
+what they will act on.
+
 ## Command reference
 
 Every command below also accepts `--json`.
@@ -263,14 +310,17 @@ Every command below also accepts `--json`.
 | Command | Does |
 |---|---|
 | `taskr context` | where am I, what was I doing |
-| `taskr next [--untriaged]` | ranked ready queue; only issues with an actionable verdict unless `--untriaged` |
+| `taskr next [--untriaged] [--held]` | ranked ready queue; only issues with an actionable verdict unless `--untriaged`. `--held` also lists what a teammate is live on |
 | `taskr ls [-s status] [-q query]` | list/search issues (`-s` repeatable) |
 | `taskr show <ref> [--context]` | issue detail; `--context` adds agent notes |
 | `taskr new <title> [-k kind] [-p priority] [-m desc] [--parent GROUP]` | open an issue |
 | `taskr group add <group> <child>` | add an existing issue to a group |
 | `taskr group rm <group> <child>` | take an issue out of a group |
-| `taskr start <ref>` | begin/resume work; prints the resume packet |
+| `taskr start <ref> [--join]` | begin/resume work; prints the resume packet. Refused when a teammate is live on it; `--join` works alongside them |
 | `taskr park -m <note> [-r reason]` | stop, naming the next action |
+| `taskr park --auto` | mechanical park for a harness SessionEnd hook; never run by hand |
+| `taskr touch` | say this session is still alive; fired by harness hooks, never by you |
+| `taskr team [--all]` | who is on what, what went quiet, what is waiting for pickup — for a human |
 | `taskr end [-r reason]` | close the current session (not the issue) |
 | `taskr close <ref> [-r resolution]` | finish the issue; the session stays open |
 | `taskr edit <ref> [--title T] [--desc TEXT] [--clear-desc] [--priority P]` | fix an open issue's record; sends only what you name; kind is fixed at creation |
