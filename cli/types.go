@@ -443,6 +443,52 @@ type Holder struct {
 	Own       bool   `json:"own"`
 }
 
+// TeamView is who is on what across the org: GET /api/team's four blocks,
+// each answering a different question. It is the one read in taskr written
+// for a person rather than an agent — an agent has no use for other
+// people's work, and every other surface is deliberately first-person.
+type TeamView struct {
+	OnItNow          []TeamSession `json:"on_it_now"`
+	GoneQuiet        []TeamSession `json:"gone_quiet"`
+	WaitingForPickup []TeamHandoff `json:"waiting_for_pickup"`
+	RecentParks      []TeamPark    `json:"recent_parks"`
+}
+
+// TeamSession is one session somebody is running, live or gone quiet.
+type TeamSession struct {
+	SessionID  string `json:"session_id"`
+	UserID     string `json:"user_id,omitempty"`
+	Email      string `json:"email,omitempty"`
+	Machine    string `json:"machine"`
+	Agent      string `json:"agent"`
+	CWD        string `json:"cwd,omitempty"`
+	IssueRef   string `json:"issue_ref,omitempty"`
+	IssueTitle string `json:"issue_title,omitempty"`
+	Branch     string `json:"branch,omitempty"`
+	StartedAt  string `json:"started_at"`
+	LastSeen   string `json:"last_seen"`
+	// Own marks the reader's own sessions. They are shown, not hidden —
+	// this is the one surface where seeing yourself among the others is the
+	// point — and the render says "you" rather than your address.
+	Own bool `json:"own"`
+}
+
+// TeamPark is one stopped session, with the person who stopped it.
+type TeamPark struct {
+	SessionView
+	Email string `json:"email,omitempty"`
+	Own   bool   `json:"own"`
+}
+
+// TeamHandoff is a park somebody could pick up: handed over deliberately,
+// or auto-parked with uncommitted files still on the branch.
+type TeamHandoff struct {
+	TeamPark
+	Auto       bool   `json:"auto,omitempty"`
+	DirtyFiles int    `json:"dirty_files,omitempty"`
+	Branch     string `json:"branch,omitempty"`
+}
+
 // TriageCandidate is one open issue that needs a fresh verdict, and why.
 // Reason is new (never triaged), rot (the repo moved under the issue's
 // snapshot: SnapshotSHA against LatestSHA), or expired (its verdict aged

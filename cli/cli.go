@@ -23,6 +23,7 @@ Usage:
   taskr context                          where am I, what was I doing
   taskr next [--untriaged] [--held]      ranked candidates; only triaged ones unless --untriaged,
                                           and --held also lists what a teammate is already on
+  taskr team [--all]                     who is on what, what went quiet, what is waiting for pickup
   taskr ls [-s status] [-q query]        list issues
   taskr show <ref> [--context]           issue detail
   taskr new <title> [-k kind] [-p priority] [-m description] [--parent GROUP]
@@ -208,6 +209,8 @@ func Run(args []string, stdout, stderr io.Writer, getenv func(string) string) in
 		run = func() error { return cmdContext(ctx, client, rest, stdout, stderr, machine, session, getenv) }
 	case "next":
 		run = func() error { return cmdNext(ctx, client, rest, stdout, stderr, machine, getenv) }
+	case "team":
+		run = func() error { return cmdTeam(ctx, client, rest, stdout, stderr, getenv) }
 	case "ls":
 		run = func() error { return cmdLs(ctx, client, rest, stdout, stderr, getenv) }
 	case "show":
@@ -732,6 +735,30 @@ func cmdStart(ctx context.Context, c *Client, args []string, stdout, stderr io.W
 		return printJSON(stdout, packet)
 	}
 	fmt.Fprint(stdout, RenderResumePacket(packet))
+	return nil
+}
+
+// cmdTeam prints who is on what. It is the one command here written for a
+// person rather than an agent: every other read subtracts other people's
+// work so the reader sees only their own, and this one is nothing but other
+// people's. That is why it is a verb somebody types rather than a block
+// appearing inside `context` or `next`.
+func cmdTeam(ctx context.Context, c *Client, args []string, stdout, stderr io.Writer, getenv func(string) string) error {
+	fs := flag.NewFlagSet("team", flag.ContinueOnError)
+	fs.SetOutput(stderr)
+	all := fs.Bool("all", false, "every project, not just the one resolved from where you're standing")
+	jsonOut := fs.Bool("json", false, "output JSON")
+	if _, err := parseFlags(fs, args); err != nil {
+		return err
+	}
+	view, err := c.TeamStatus(ctx, LocatorFrom(getenv, cwd()), *all)
+	if err != nil {
+		return err
+	}
+	if *jsonOut {
+		return printJSON(stdout, view)
+	}
+	RenderTeam(stdout, time.Now(), view)
 	return nil
 }
 
