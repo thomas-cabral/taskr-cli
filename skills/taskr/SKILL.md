@@ -274,7 +274,7 @@ Every command below also accepts `--json`.
 | `taskr end [-r reason]` | close the current session (not the issue) |
 | `taskr close <ref> [-r resolution]` | finish the issue; the session stays open |
 | `taskr edit <ref> [--title T] [--desc TEXT] [--clear-desc] [--priority P]` | fix an open issue's record; sends only what you name; kind is fixed at creation |
-| `taskr offload <title> -m <brief> [-k kind] [-s severity]` | file discovered work |
+| `taskr offload <title> -m <brief> [-k kind] [-s severity] [--adhoc]` | file discovered work |
 | `taskr comment <ref> -m <text>` | add a comment |
 | `taskr triage [--all]` | what needs a verdict, and why: `new`, `rot` or `expired` |
 | `taskr triage <ref>` | does this one issue need a verdict |
@@ -310,17 +310,33 @@ Every command below also accepts `--json`.
 `priority`: critical, high, medium, low.
 `verdict`: actionable, already_fixed, duplicate, stale, needs_info.
 
-`new` and `offload` take `--project <slug>` to name a project outright;
-`next`, `ls` and `triage` take `--all` to widen past the project you're
-standing in.
+`new` and `offload` take `--project <slug>` to name a project outright and
+`--adhoc` to file into your org's inbox; `next`, `ls` and `triage` take
+`--all` to widen past the project you're standing in.
 
 Without `--project`, an offload lands in the project of the repo you are
-standing in — not the project of your session. That is the point of the
-verb: a bug noticed in another repo belongs to that repo, and the session
-only says where you were when you found it (the DISCOVERED_DURING edge
-keeps that). The session's project is the fallback for a repo taskr does
-not know. Standing at the root of a repo that serves several projects is
-an error, not a guess — say which with `--project`.
+standing in — not the project of your session, which is not consulted at
+all. That is the point of the verb: a bug noticed in another repo belongs
+to that repo, and the session only says where you were when you found it
+(the DISCOVERED_DURING edge keeps that). Standing at the root of a repo
+that serves several projects is an error, not a guess — say which with
+`--project`.
+
+**When nothing resolves, the answer is the inbox, not a guess.** `taskr
+new` refuses: it is deliberate work, so say where it goes. `taskr offload`
+never refuses — noticing something must not derail what you were doing —
+and files ad-hoc into the inbox instead, saying so. Either way the output
+names the project it chose, so a misroute is visible in the moment rather
+than days later.
+
+`--adhoc` files into the inbox on purpose: a stray thought that belongs to
+no repo and no backlog, had while standing in a checkout that would
+otherwise have claimed it. It is an opt-in and never a fallback — a write
+that merely lost its locator still fails loudly, because "this belongs
+nowhere" and "you told me nothing" are different answers and only one is
+safe to act on. An inbox issue currently stays in the inbox: nothing moves
+an issue between projects yet (TSK-233), so prefer `--project` whenever you
+do know where the work belongs.
 
 ## Plans live on the issue
 

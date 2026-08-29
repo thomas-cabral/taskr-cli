@@ -16,9 +16,15 @@ for the one time a write bounces.
 
 You land here one of two ways:
 
-- A write — `taskr new`, `taskr offload` — failed with an error containing
-  "repo is not registered." The error names this skill because the fix is
-  a handful of commands, not a person you have to go track down.
+- A write — `taskr new` — failed with an error containing "repo is not
+  registered." The error names this skill because the fix is a handful of
+  commands, not a person you have to go track down.
+- `taskr offload` said it filed ad-hoc, in the inbox, because "nothing here
+  resolves to a project". An offload never refuses — noticing something must
+  not derail what you were doing — so an unregistered repo shows up as a
+  finding parked in the inbox rather than as an error. Same situation, same
+  fix, and worth doing now: nothing moves an issue between projects yet, so
+  every offload made before you register lands in the inbox and stays there.
 - `taskr context` returned a setup hint instead of a project: the same
   situation, surfaced before you tried to write anything.
 
