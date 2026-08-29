@@ -339,16 +339,23 @@ type GitSnapshotInput struct {
 
 // CreateIssueInput is the wire shape POST /api/issues accepts.
 //
-// ProjectSlug, when set, wins over Locator server-side — an explicit
-// --project is more deliberate than wherever the caller happens to be
-// standing. Locator carries the fallback: the repo and directory a caller
-// never named a project for.
+// The server routes on: ProjectSlug when set; then AdHoc; then Locator;
+// then it refuses. An explicit --project is more deliberate than wherever
+// the caller happens to be standing, and --adhoc is more deliberate still
+// than the standing, because a stray thought had while sitting in a
+// checkout is not that checkout's work. Locator carries the rest: the repo
+// and directory a caller never named a project for.
+//
+// AdHoc is an opt-in and never a fallback. A write that simply lost its
+// locator still fails, because "this belongs to no project" and "you told
+// me nothing" are different answers and only one is safe to act on.
 type CreateIssueInput struct {
 	Title       string            `json:"title"`
 	Description string            `json:"description,omitempty"`
 	Kind        string            `json:"kind,omitempty"`
 	Priority    string            `json:"priority,omitempty"`
 	ProjectSlug string            `json:"project,omitempty"`
+	AdHoc       bool              `json:"adhoc,omitempty"`
 	Locator     Locator           `json:"locator,omitempty"`
 	Snapshot    *GitSnapshotInput `json:"git_snapshot,omitempty"`
 }
@@ -550,12 +557,17 @@ func (c *Client) EndWork(ctx context.Context, in EndWorkInput) error {
 // OffloadInput is the wire shape POST /api/offload accepts.
 //
 // The server picks the project in this order: ProjectSlug when set; then
-// Locator — the repo the caller is standing in — when taskr knows it; then
-// the session's project. The locator outranks the session on purpose: a
+// AdHoc; then Locator — the repo the caller is standing in — when taskr
+// knows it; then the org's inbox. The session is not a rung at all: a
 // finding offloaded from another repo belongs to that repo, and the session
 // only records where the caller was when they found it (TSK-59). A repo
-// that serves several projects is refused rather than guessed; ProjectSlug
-// is how the caller decides.
+// that serves several projects is still refused rather than guessed;
+// ProjectSlug is how the caller decides.
+//
+// Unlike CreateIssueInput, AdHoc is not what an offload NEEDS to reach the
+// inbox — an unresolvable locator lands there anyway, because noticing
+// something must not derail the thing you were doing. It is how a caller
+// says so deliberately from a repo that would otherwise have resolved.
 type OffloadInput struct {
 	SessionID   string            `json:"session_id"`
 	Title       string            `json:"title"`
@@ -563,6 +575,7 @@ type OffloadInput struct {
 	Kind        string            `json:"kind,omitempty"`
 	Severity    string            `json:"severity,omitempty"`
 	ProjectSlug string            `json:"project,omitempty"`
+	AdHoc       bool              `json:"adhoc,omitempty"`
 	Locator     Locator           `json:"locator,omitempty"`
 	Snapshot    *GitSnapshotInput `json:"git_snapshot,omitempty"`
 }

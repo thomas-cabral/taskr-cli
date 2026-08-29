@@ -83,7 +83,10 @@ Usage:
   taskr project rename <slug> <new-slug> [--name N]
 
 Every command accepts --json for machine-readable output.
-new and offload accept --project <slug> to name a project outright.
+new and offload accept --project <slug> to name a project outright, and
+--adhoc to file into the inbox — work that belongs to no repo and no
+backlog. offload never refuses: from a repo taskr cannot resolve it files
+ad-hoc anyway, and says so.
 next and ls accept --all to widen past the caller's resolved project.
 Env: TASKR_API (default https://api.aitaskr.com), TASKR_KEY.
      TASKR_SESSION names this invocation context, so two terminals (or a
@@ -609,6 +612,7 @@ func cmdNew(ctx context.Context, c *Client, args []string, stdout, stderr io.Wri
 	priority := fs.String("p", "", "issue priority")
 	desc := fs.String("m", "", "description")
 	project := fs.String("project", "", "project slug — wins over the repo/directory you're standing in")
+	adhoc := fs.Bool("adhoc", false, "file into the inbox: work that belongs to no repo and no backlog")
 	parent := fs.String("parent", "", "group to add the new issue to")
 	jsonOut := fs.Bool("json", false, "output JSON")
 	positional, err := parseFlags(fs, args)
@@ -616,12 +620,19 @@ func cmdNew(ctx context.Context, c *Client, args []string, stdout, stderr io.Wri
 		return err
 	}
 	if len(positional) < 1 {
-		return fmt.Errorf("usage: taskr new <title> [-k kind] [-p priority] [-m description] [--project slug] [--parent GROUP]")
+		return fmt.Errorf("usage: taskr new <title> [-k kind] [-p priority] [-m description] [--project slug|--adhoc] [--parent GROUP]")
+	}
+	// Both flags answer "which project", so passing both says two different
+	// things at once. The server would keep the slug and drop --adhoc; say
+	// so here instead, because a caller who typed --adhoc meant it and a
+	// silently ignored flag is how a misroute goes unnoticed (TSK-59).
+	if err := refuseProjectAndAdHoc(*project, *adhoc); err != nil {
+		return err
 	}
 	title := strings.Join(positional, " ")
 	ref, err := c.CreateIssue(ctx, CreateIssueInput{
 		Title: title, Description: *desc, Kind: *kind, Priority: *priority,
-		ProjectSlug: *project, Locator: LocatorFrom(getenv, cwd()),
+		ProjectSlug: *project, AdHoc: *adhoc, Locator: LocatorFrom(getenv, cwd()),
 		Snapshot: gitSnapshot(getenv),
 	})
 	if err != nil {
@@ -930,14 +941,18 @@ func cmdOffload(ctx context.Context, c *Client, args []string, stdout, stderr io
 	brief := fs.String("m", "", "brief a cold agent can act on")
 	kind := fs.String("k", "", "issue kind")
 	severity := fs.String("s", "", "severity")
-	project := fs.String("project", "", "project slug — wins over the session's project and the locator")
+	project := fs.String("project", "", "project slug — wins over the repo/directory you're standing in")
+	adhoc := fs.Bool("adhoc", false, "file into the inbox even if the repo you're standing in would have resolved")
 	jsonOut := fs.Bool("json", false, "output JSON")
 	positional, err := parseFlags(fs, args)
 	if err != nil {
 		return err
 	}
 	if len(positional) < 1 || *brief == "" {
-		return fmt.Errorf("usage: taskr offload <title> -m <brief> [-k kind] [-s severity] [--project slug]")
+		return fmt.Errorf("usage: taskr offload <title> -m <brief> [-k kind] [-s severity] [--project slug|--adhoc]")
+	}
+	if err := refuseProjectAndAdHoc(*project, *adhoc); err != nil {
+		return err
 	}
 	title := strings.Join(positional, " ")
 
@@ -949,12 +964,13 @@ func cmdOffload(ctx context.Context, c *Client, args []string, stdout, stderr io
 	if err != nil && !errors.Is(err, ErrNoActiveSession) {
 		return err
 	}
-	// The project comes from where the caller stands (LocatorFrom), ahead
-	// of the session's — see OffloadInput. The ref printed below carries
-	// the project key, which is how a reader sees where it went.
+	// The project comes from where the caller stands (LocatorFrom), never
+	// from the session — see OffloadInput. The answer is printed below
+	// rather than left to the ref's key: a caller who named no project
+	// cannot predict it, which is exactly how TSK-59 stayed invisible.
 	res, err := c.Offload(ctx, OffloadInput{
 		SessionID: session.ID, Title: title, Brief: *brief, Kind: *kind, Severity: *severity,
-		ProjectSlug: *project, Locator: LocatorFrom(getenv, cwd()),
+		ProjectSlug: *project, AdHoc: *adhoc, Locator: LocatorFrom(getenv, cwd()),
 		Snapshot: gitSnapshot(getenv),
 	})
 	if err != nil {
@@ -964,11 +980,49 @@ func cmdOffload(ctx context.Context, c *Client, args []string, stdout, stderr io
 		return printJSON(stdout, res)
 	}
 	fmt.Fprintf(stdout, "Offloaded %s — %s\n", res.Issue.Ref, title)
+	fmt.Fprint(stdout, offloadDestination(res, *adhoc))
 	RenderSimilar(stdout, res.Similar, fmt.Sprintf("If one is the same work: taskr relate %s DUPLICATE_OF <ref>", res.Issue.Ref))
 	if session.ID == "" {
 		fmt.Fprintf(stdout, "No active session on %s, so it is filed without one.\n", machine)
 	}
 	return nil
+}
+
+// refuseProjectAndAdHoc rejects the one flag combination that contradicts
+// itself. --project names a backlog; --adhoc says the work belongs to
+// none. The server resolves the pair by precedence (the slug wins), but a
+// caller at a terminal typed both on purpose and deserves to be told which
+// one taskr would have thrown away.
+func refuseProjectAndAdHoc(project string, adhoc bool) error {
+	if project != "" && adhoc {
+		return fmt.Errorf("--project %s and --adhoc contradict each other: --adhoc is for work that belongs to no project", project)
+	}
+	return nil
+}
+
+// offloadDestination is the line that says where the finding went.
+//
+// It exists because the ref alone did not say it loudly enough: TSK-59's
+// misroutes ran for days because a caller who passed no project had no way
+// to see which backlog taskr picked. An older server sends no project at
+// all, and then there is nothing honest to print — silence beats a guess.
+//
+// asked distinguishes the two ways an offload reaches the inbox. A caller
+// who typed --adhoc already knows why it landed there; a caller who did
+// not needs to know that nothing here resolved, because the fix is to
+// register the repo rather than to keep filing into the inbox.
+func offloadDestination(res CreatedOffload, asked bool) string {
+	switch {
+	case res.AdHoc && asked:
+		return "Filed ad-hoc, in the inbox.\n"
+	case res.AdHoc:
+		return "Filed ad-hoc, in the inbox: nothing here resolves to a project.\n" +
+			"Register this repo with `taskr project attach` if its work belongs to one.\n"
+	case res.Project != "":
+		return fmt.Sprintf("Filed in %s.\n", res.Project)
+	default:
+		return ""
+	}
 }
 
 func cmdComment(ctx context.Context, c *Client, args []string, stdout, stderr io.Writer) error {

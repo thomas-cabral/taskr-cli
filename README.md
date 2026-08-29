@@ -91,12 +91,12 @@ taskr context                 # where am I, what was I doing
 taskr next                    # ranked candidates
 taskr ls [-s status] [-q q]   # list issues
 taskr show <ref> [--context]  # issue detail
-taskr new <title> [-k kind] [-p priority] [-m description]
+taskr new <title> [-k kind] [-p priority] [-m description] [--project S|--adhoc]
 taskr start <ref>             # start or resume work; prints the resume packet
 taskr park -m <note> [-r reason]
 taskr end [-r reason]
 taskr close <ref> [-r resolution]
-taskr offload <title> -m <brief> [-k kind] [-s severity]
+taskr offload <title> -m <brief> [-k kind] [-s severity] [--project S|--adhoc]
 taskr comment <ref> -m <text>
 taskr triage <ref> <verdict> [-e evidence] [-d duplicate-of]
 taskr timeline <ref>
@@ -119,6 +119,15 @@ Every command accepts `--json` for machine-readable output; the default is
 human-readable prose, which matters most for `taskr start` — the resume
 packet is the product, not a data dump. Run `taskr help` for the full
 command reference.
+
+Where a write lands is resolved in one order: `--project <slug>` when you
+name one, then `--adhoc`, then the repo and directory you are standing in.
+`taskr new` refuses when none of those answers; `taskr offload` never
+refuses — noticing something must not derail what you were doing — so from
+a repo taskr cannot resolve it files ad-hoc into your org's inbox instead,
+and its output names the project it chose either way. `--adhoc` is an
+explicit opt-in, never a fallback: it is for work that belongs to no repo
+and no backlog, and a write that merely lost its locator still fails loudly.
 
 `new` and `offload` answer with any open issue that already says the same
 thing — `Similar open issues:`, scored, matched by meaning rather than

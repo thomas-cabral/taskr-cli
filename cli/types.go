@@ -400,9 +400,18 @@ type TimelineEntry struct {
 
 // OffloadResult is deliberately small: enough to mention the new issue and
 // keep going.
+//
+// Project names where the issue actually landed, and it is not redundant
+// with the ref: a caller who named no project cannot predict the answer,
+// and TSK-59's misroutes survived days precisely because nothing the
+// caller saw said which backlog took the finding. AdHoc marks the inbox
+// specifically, so the CLI can say "filed ad-hoc" rather than reporting
+// the inbox as though it were a project someone chose.
 type OffloadResult struct {
 	Issue         IssueRef `json:"issue"`
 	ParentIssueID string   `json:"parent_issue_id,omitempty"`
+	Project       string   `json:"project,omitempty"`
+	AdHoc         bool     `json:"adhoc,omitempty"`
 }
 
 // authStatus is the response from GET /api/auth/status.
