@@ -200,8 +200,31 @@ func RenderContext(v ContextView, actor string) string {
 		b.WriteString("\nNo active session on this machine. Run `taskr next` or `taskr ls`, then `taskr start <ref>`.\n")
 	}
 
-	if len(v.Parked) > 0 {
-		fmt.Fprintf(&b, "\nParked sessions (%d, newest first):\n", len(v.Parked))
+	// The heading has to distinguish a short list from a shortened one. The
+	// server caps this block and drops anything past its window (TSK-246), so
+	// five rows can mean five parks or five of twenty — and a reader who
+	// cannot tell reads the second as the first and stops looking. total is
+	// clamped up because a server predating ParkedTotal sends zero, and every
+	// row it does send is then the whole list.
+	total := v.ParkedTotal
+	if total < len(v.Parked) {
+		total = len(v.Parked)
+	}
+	const parkedRest = "taskr ls -s parked"
+	switch {
+	case total == 0:
+		// Nothing parked: the block is silence, as it always was.
+	case len(v.Parked) == 0:
+		// Everything in scope is older than the server's window. An empty
+		// block would read as "nothing is parked", which is the one thing
+		// this is not.
+		fmt.Fprintf(&b, "\nParked sessions: %d, none recent — %s\n", total, parkedRest)
+	default:
+		if len(v.Parked) < total {
+			fmt.Fprintf(&b, "\nParked sessions (%d of %d, unfinished first):\n", len(v.Parked), total)
+		} else {
+			fmt.Fprintf(&b, "\nParked sessions (%d, unfinished first):\n", total)
+		}
 		for _, s := range v.Parked {
 			// One line per row: what it was, why it stopped, how long ago.
 			// Orientation is printed at every session start, and rendering
@@ -236,6 +259,9 @@ func RenderContext(v ContextView, actor string) string {
 			} else {
 				fmt.Fprintf(&b, "  %s\n", head)
 			}
+		}
+		if rest := total - len(v.Parked); rest > 0 {
+			fmt.Fprintf(&b, "  +%d older — %s\n", rest, parkedRest)
 		}
 	}
 

@@ -370,10 +370,15 @@ type ContextView struct {
 	// has moved since ActiveSession started. See its type.
 	UntouchedPlan *UntouchedPlan `json:"untouched_plan,omitempty"`
 	Parked        []SessionView  `json:"parked,omitempty"`
-	OpenIssues    int            `json:"open_issues"`
-	Project       *ProjectView   `json:"project,omitempty"`
-	SetupHint     *SetupHint     `json:"setup_hint,omitempty"`
-	Ambiguous     *AmbiguousHint `json:"ambiguous,omitempty"`
+	// ParkedTotal is how many issues are parked in scope before the window
+	// and the cap that shorten Parked. It is what lets the block say what it
+	// is not showing; a server predating it sends zero, which renders as a
+	// complete list — the same thing every row said before it existed.
+	ParkedTotal int            `json:"parked_total,omitempty"`
+	OpenIssues  int            `json:"open_issues"`
+	Project     *ProjectView   `json:"project,omitempty"`
+	SetupHint   *SetupHint     `json:"setup_hint,omitempty"`
+	Ambiguous   *AmbiguousHint `json:"ambiguous,omitempty"`
 	// ClaimLost is set when this session went quiet long enough to fall out
 	// of the claim window and a teammate has since picked its issue up. See
 	// its type: it is the one thing a returning agent has to read before it

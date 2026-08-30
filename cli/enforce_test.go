@@ -4,6 +4,9 @@ package cli
 import (
 	"bytes"
 	"encoding/json"
+	"fmt"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
@@ -317,11 +320,18 @@ func TestEnforceSkipsTheCursorRuleWhenHomeIsTheRepository(t *testing.T) {
 	}
 }
 
-// The nudge is what the Claude Code hook prints into every session; it has
-// to point at orientation and cost one read to follow.
+// The nudge is what the Claude Code hook prints into every session; in a
+// repo taskr tracks it has to point at orientation and cost one read to
+// follow. The server is pinned because which directive this prints now
+// depends on what the checkout resolves to (TSK-247).
 func TestSkillNudgePrintsTheDirective(t *testing.T) {
+	srv := nudgeServer(t, `{"machine":"lab","project":{"id":"p-1","slug":"taskr","name":"taskr"}}`)
 	var stdout, stderr bytes.Buffer
-	if code := Run([]string{"skill", "nudge"}, &stdout, &stderr, homeEnv(t.TempDir())); code != 0 {
+	env := envAt(map[string]string{
+		"TASKR_API": srv.URL, "TASKR_KEY": "x",
+		"TASKR_REMOTE": "git@github.com:acme/taskr.git",
+	})
+	if code := Run([]string{"skill", "nudge"}, &stdout, &stderr, env); code != 0 {
 		t.Fatalf("nudge exited %d, stderr: %s", code, stderr.String())
 	}
 	if !strings.Contains(stdout.String(), "taskr context") {
@@ -419,5 +429,122 @@ func TestEnforceAddsMissingHooksToAnExistingNudge(t *testing.T) {
 		if !strings.Contains(text, want) {
 			t.Errorf("enforce did not add %q to a settings file that already had the nudge:\n%s", want, text)
 		}
+	}
+}
+
+// nudgeServer answers /api/context with the given body, so a test can pin
+// what the repo the caller is standing in resolves to.
+func nudgeServer(t *testing.T, body string) *httptest.Server {
+	t.Helper()
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/api/context" {
+			t.Errorf("nudge called %s %s — it asks one question", r.Method, r.URL.Path)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		fmt.Fprint(w, body)
+	}))
+	t.Cleanup(srv.Close)
+	return srv
+}
+
+// TestNudgeInATrackedRepoDemandsTheSkill: where taskr knows the project, the
+// imperative directive is the point — a session that skips the skill is a
+// session that re-derives work already filed.
+func TestNudgeInATrackedRepoDemandsTheSkill(t *testing.T) {
+	srv := nudgeServer(t, `{"machine":"lab","project":{"id":"p-1","slug":"taskr","name":"taskr"}}`)
+	got := nudgeDirective(envAt(map[string]string{
+		"TASKR_API": srv.URL, "TASKR_KEY": "x",
+		"TASKR_REMOTE": "git@github.com:acme/taskr.git",
+	}))
+	if got != enforceDirective {
+		t.Errorf("tracked repo got the untracked directive:\n%s", got)
+	}
+}
+
+// TestNudgeInAnUntrackedRepoDoesNotAskForTheSkill is TSK-247. A repo taskr
+// does not track has no issues and no parked sessions, so the full directive
+// buys a SKILL.md load to learn nothing — on every session, in every such
+// checkout on the machine.
+func TestNudgeInAnUntrackedRepoDoesNotAskForTheSkill(t *testing.T) {
+	srv := nudgeServer(t, `{"machine":"lab","setup_hint":{"reason":"no repo registered for this remote"}}`)
+	got := nudgeDirective(envAt(map[string]string{
+		"TASKR_API": srv.URL, "TASKR_KEY": "x",
+		"TASKR_REMOTE": "git@github.com:someone/unrelated.git",
+	}))
+	if got != untrackedDirective {
+		t.Errorf("untracked repo still got the full directive:\n%s", got)
+	}
+	if strings.Contains(got, "invoke the taskr skill") {
+		t.Errorf("untracked directive carries an imperative to load the skill:\n%s", got)
+	}
+	for _, want := range []string{"taskr project attach", "taskr offload"} {
+		if !strings.Contains(got, want) {
+			t.Errorf("untracked directive does not name %q — silence loses the door, not just the cost:\n%s", want, got)
+		}
+	}
+}
+
+// TestNudgeOutsideAnyCheckoutAnswersLocally: no remote means no project, and
+// the server would say the same thing over the network. A scratch directory
+// is the commonest untracked case and must not cost a request.
+func TestNudgeOutsideAnyCheckoutAnswersLocally(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		t.Errorf("nudge called %s with no remote to resolve", r.URL.Path)
+	}))
+	t.Cleanup(srv.Close)
+	got := nudgeDirective(envAt(map[string]string{"TASKR_API": srv.URL, "TASKR_KEY": "x"}))
+	if got != untrackedDirective {
+		t.Errorf("a directory with no remote got the full directive:\n%s", got)
+	}
+}
+
+// TestNudgeFailsOpenWhenTheHostIsUnreachable: an unreachable server is not
+// evidence that taskr has nothing to say here. The two mistakes are not
+// symmetric — under-nudging a tracked repo costs the check this tool exists
+// for, over-nudging costs tokens — so anything short of a definite "no
+// project" prints the full directive.
+func TestNudgeFailsOpenWhenTheHostIsUnreachable(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {}))
+	url := srv.URL
+	srv.Close()
+	got := nudgeDirective(envAt(map[string]string{
+		"TASKR_API": url, "TASKR_KEY": "x",
+		"TASKR_REMOTE": "git@github.com:acme/taskr.git",
+	}))
+	if got != enforceDirective {
+		t.Errorf("an unreachable host silenced the nudge:\n%s", got)
+	}
+}
+
+// TestNudgeFailsOpenWhenTheCredentialIsRefused: same rule, the other cause.
+// A key the server will not accept says nothing about whether this repo is
+// tracked, so it must not be read as "no project".
+func TestNudgeFailsOpenWhenTheCredentialIsRefused(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusUnauthorized)
+		fmt.Fprint(w, `{"error":"unauthorized"}`)
+	}))
+	t.Cleanup(srv.Close)
+	got := nudgeDirective(envAt(map[string]string{
+		"TASKR_API": srv.URL, "TASKR_KEY": "stale",
+		"TASKR_REMOTE": "git@github.com:acme/taskr.git",
+	}))
+	if got != enforceDirective {
+		t.Errorf("a refused credential silenced the nudge:\n%s", got)
+	}
+}
+
+// TestNudgeInAnAmbiguousRepoDemandsTheSkill: the repo IS registered, it just
+// serves several projects and this directory falls under none of them. That
+// is a tracked checkout with a resolution problem, and the skill is where the
+// fix is written down.
+func TestNudgeInAnAmbiguousRepoDemandsTheSkill(t *testing.T) {
+	srv := nudgeServer(t, `{"machine":"lab","ambiguous":{"reason":"this repo serves 2 projects"}}`)
+	got := nudgeDirective(envAt(map[string]string{
+		"TASKR_API": srv.URL, "TASKR_KEY": "x",
+		"TASKR_REMOTE": "git@github.com:acme/monorepo.git",
+	}))
+	if got != enforceDirective {
+		t.Errorf("an ambiguous checkout got the untracked directive:\n%s", got)
 	}
 }

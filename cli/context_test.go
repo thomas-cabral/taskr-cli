@@ -68,7 +68,7 @@ func TestContextParkedRowsAreOneLiner(t *testing.T) {
 	))}}
 	out := RenderContext(v, "agent")
 	for _, want := range []string{
-		"Parked sessions (1, newest first):",
+		"Parked sessions (1, unfinished first):",
 		"TSK-216 — Site copy: replace 'context runs out' framing",
 		"parked 3h ago",
 		"done for now",
@@ -162,5 +162,84 @@ func TestParkReasonUnwrapsTheCodeTokens(t *testing.T) {
 		if got := parkReason(in); got != want {
 			t.Errorf("parkReason(%q) = %q, want %q", in, got, want)
 		}
+	}
+}
+
+// TestContextParkedBlockSaysWhatItIsNotShowing is the render half of
+// TSK-246. The server caps this block and drops anything past its window, so
+// a five-row list can be five parks or five of twenty — and a reader who
+// cannot tell reads the second as the first and stops looking.
+func TestContextParkedBlockSaysWhatItIsNotShowing(t *testing.T) {
+	parkedAt := time.Now().Add(-5 * time.Hour).UTC().Format("2006-01-02T15:04:05.999999999Z07:00")
+	v := ContextView{
+		ParkedTotal: 20,
+		Parked: []SessionView{mustDecode[SessionView](t, parkedRow(
+			"01a045a6", "TSK-216", "Site copy", "blocked", "", parkedAt, 0,
+		))},
+	}
+	out := RenderContext(v, "agent")
+	for _, want := range []string{
+		"Parked sessions (1 of 20, unfinished first):",
+		"+19 older — taskr ls -s parked",
+	} {
+		if !strings.Contains(out, want) {
+			t.Errorf("render missing %q\noutput:\n%s", want, out)
+		}
+	}
+}
+
+// TestContextParkedBlockUntruncatedHasNoTail: a complete list must not carry
+// a tail line inviting a reader to go looking for rows that do not exist.
+func TestContextParkedBlockUntruncatedHasNoTail(t *testing.T) {
+	parkedAt := time.Now().Add(-5 * time.Hour).UTC().Format("2006-01-02T15:04:05.999999999Z07:00")
+	v := ContextView{
+		ParkedTotal: 1,
+		Parked: []SessionView{mustDecode[SessionView](t, parkedRow(
+			"01a045a6", "TSK-216", "Site copy", "blocked", "", parkedAt, 0,
+		))},
+	}
+	out := RenderContext(v, "agent")
+	if !strings.Contains(out, "Parked sessions (1, unfinished first):") {
+		t.Errorf("render did not use the complete-list heading:\n%s", out)
+	}
+	if strings.Contains(out, "older —") {
+		t.Errorf("tail line rendered for a complete list:\n%s", out)
+	}
+}
+
+// TestContextParkedTotalWithoutRowsStillSaysSo: when everything in scope is
+// older than the server's window there are no rows, but an empty block would
+// read as "nothing is parked" — the one thing that state is not.
+func TestContextParkedTotalWithoutRowsStillSaysSo(t *testing.T) {
+	out := RenderContext(ContextView{ParkedTotal: 12}, "agent")
+	want := "Parked sessions: 12, none recent — taskr ls -s parked"
+	if !strings.Contains(out, want) {
+		t.Errorf("render missing %q\noutput:\n%s", want, out)
+	}
+}
+
+// TestContextNoParksRendersNoBlock keeps the quiet case quiet: a machine with
+// nothing parked pays nothing for the block.
+func TestContextNoParksRendersNoBlock(t *testing.T) {
+	out := RenderContext(ContextView{Machine: "lab"}, "agent")
+	if strings.Contains(out, "Parked sessions") {
+		t.Errorf("parked block rendered with nothing parked:\n%s", out)
+	}
+}
+
+// TestContextParkedTotalFromOlderServerReadsAsComplete: a server predating
+// ParkedTotal sends zero. Every row it does send is then the whole list, so
+// the block must render as complete rather than claiming "1 of 0".
+func TestContextParkedTotalFromOlderServerReadsAsComplete(t *testing.T) {
+	parkedAt := time.Now().Add(-5 * time.Hour).UTC().Format("2006-01-02T15:04:05.999999999Z07:00")
+	v := ContextView{Parked: []SessionView{mustDecode[SessionView](t, parkedRow(
+		"01a045a6", "TSK-216", "Site copy", "blocked", "", parkedAt, 0,
+	))}}
+	out := RenderContext(v, "agent")
+	if !strings.Contains(out, "Parked sessions (1, unfinished first):") {
+		t.Errorf("render did not treat a zero total as a complete list:\n%s", out)
+	}
+	if strings.Contains(out, "older —") {
+		t.Errorf("tail line rendered against a server that sends no total:\n%s", out)
 	}
 }
