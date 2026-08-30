@@ -49,7 +49,7 @@ func runSkill(args []string, stdout, stderr io.Writer, getenv func(string) strin
 	case "enforce":
 		return cmdSkillEnforce(args[1:], stdout, stderr, getenv)
 	case "nudge":
-		return cmdSkillNudge(stdout)
+		return cmdSkillNudge(stdout, getenv)
 	case "ls":
 		return cmdSkillLs(args[1:], stdout, getenv)
 	default:

@@ -2,6 +2,7 @@
 package cli
 
 import (
+	"context"
 	"encoding/json"
 	"flag"
 	"fmt"
@@ -9,6 +10,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 )
 
 // enforceDirective is the session-start nudge every shim delivers. Skills
@@ -27,6 +29,35 @@ const enforceDirective = "taskr is installed on this machine. Before any other a
 	"a parked session — check before treating it as new work. When you notice " +
 	"work that is not what you are working on, `taskr offload` it instead of " +
 	"fixing it inline."
+
+// untrackedDirective is what a checkout taskr does not track gets instead.
+//
+// enforceDirective is deliberately imperative, and a compliant model obeys
+// it: it loads SKILL.md — the full command reference and every convention —
+// before it does anything else. In a repo taskr tracks that is the point. In
+// one it does not, it is thousands of tokens spent to establish that taskr
+// has nothing to say here, on every session, in every such checkout on the
+// machine (TSK-247). The cost is invisible on a large frontier context and
+// very visible on a local model, which is how it was noticed.
+//
+// Silence would be cheaper still and is the wrong answer. An untracked
+// checkout is also the state `taskr project attach` exists to fix, and
+// noticing work that belongs nowhere is exactly when `offload` earns its
+// keep — so this says where the door is without walking through it. What it
+// must not do is give the model an imperative: the first live test (TSK-188)
+// showed a model obeys the one executable ask it sees, and an ask here is a
+// skill load by another name.
+const untrackedDirective = "taskr is installed on this machine, but this " +
+	"checkout is registered to no taskr project, so taskr has no issues or " +
+	"parked sessions for it. Do not load the taskr skill for ordinary work " +
+	"here. Load it only to file or resume something: `taskr project attach` " +
+	"registers this repo, and `taskr offload` files into the org inbox from " +
+	"anywhere."
+
+// nudgeTimeout bounds the one question the nudge asks the API. It runs on
+// SessionStart, before the human sees a prompt, so a host that is slow or
+// gone must cost a beat and not a session.
+const nudgeTimeout = 2 * time.Second
 
 // The markers fencing the directive inside a file the user also writes.
 // Everything between them belongs to taskr and is rewritten on upgrade;
@@ -143,9 +174,54 @@ func cmdSkillEnforce(args []string, stdout, stderr io.Writer, getenv func(string
 // cmdSkillNudge prints the directive. It exists to be called from the
 // Claude Code SessionStart hook that enforce installs; a human running it
 // by hand just sees what their agents see.
-func cmdSkillNudge(stdout io.Writer) error {
-	_, err := fmt.Fprintln(stdout, enforceDirective)
+func cmdSkillNudge(stdout io.Writer, getenv func(string) string) error {
+	_, err := fmt.Fprintln(stdout, nudgeDirective(getenv))
 	return err
+}
+
+// nudgeDirective picks which directive this checkout gets: the full one where
+// taskr tracks the repo, the cheap one where it does not.
+//
+// It fails OPEN. Anything short of a definite "this repo is registered to no
+// project" prints the full directive — no host configured, no credential, a
+// server that is down, a timeout. None of those are evidence that taskr has
+// nothing to say here, and the two mistakes are not symmetric: under-nudging
+// a tracked repo costs a session that never checks whether its task is
+// already an open issue or a parked one, which is the whole thing this tool
+// exists to prevent. Over-nudging costs tokens.
+func nudgeDirective(getenv func(string) string) string {
+	// A directory with no origin remote resolves to no project, and the
+	// server would say so more slowly. Answering locally also keeps the
+	// scratch directory — the commonest untracked case — off the network.
+	loc := LocatorFrom(getenv, cwd())
+	if loc.RemoteURL == "" {
+		return untrackedDirective
+	}
+	target, err := resolveTarget(getenv, io.Discard)
+	if err != nil {
+		return enforceDirective
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), nudgeTimeout)
+	defer cancel()
+	c := &Client{BaseURL: target.BaseURL, Key: target.Key}
+	v, err := c.Context(ctx, ContextQuery{
+		Machine: machineName(), CWD: cwd(),
+		RemoteURL: loc.RemoteURL, Subpath: loc.Subpath,
+	})
+	switch {
+	case err != nil:
+		return enforceDirective
+	case v.Project != nil:
+		return enforceDirective
+	case v.Ambiguous != nil:
+		// The repo IS registered; it just serves several projects and this
+		// directory falls under none of their registrations. That is a
+		// tracked checkout with a resolution problem, and the skill is where
+		// the fix is written down.
+		return enforceDirective
+	default:
+		return untrackedDirective
+	}
 }
 
 // enforceClaudeHooks merges taskr's hooks into Claude Code's user settings,
