@@ -492,8 +492,11 @@ installed skill has never heard of, and `taskr skill install` fixes it.
 session-start nudge in each harness (a Claude Code hook, marked blocks in
 the Codex and opencode AGENTS.md files, a Cursor rule in the current
 repo) so a fresh session is told to orient with `taskr context` instead
-of being left to discover the skill by its description. In Claude Code it
-also plants three lifecycle hooks you never run yourself: `taskr touch` on
+of being left to discover the skill by its description. That nudge fires on
+a cold start, a resume and a `/clear`, and deliberately not on a compaction:
+an agent whose window was just compacted is mid-task and has not forgotten
+what taskr is, so re-reading this file is not what it needs. In Claude Code
+it also plants three lifecycle hooks you never run yourself: `taskr touch` on
 Stop and UserPromptSubmit, saying the session is still alive, and `taskr
 park --auto` on SessionEnd, which parks whatever you did not. They are
 silent, they never fail, and they exist because remembering is not a thing
