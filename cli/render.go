@@ -450,9 +450,9 @@ func RenderTeam(w io.Writer, now time.Time, v TeamView) {
 	if len(v.GoneQuiet) > 0 {
 		fmt.Fprintf(w, "\nGone quiet (%d):\n", len(v.GoneQuiet))
 		for _, s := range v.GoneQuiet {
-			fmt.Fprintf(w, "  %s — %s · last seen %s · %s\n",
+			fmt.Fprintf(w, "  %s — %s · last seen %s%s\n",
 				teamIssue(s.IssueRef, s.IssueTitle), teamWho(s.Email, s.Machine, s.Own),
-				relativeAge(now, s.LastSeen), s.Machine)
+				relativeAge(now, s.LastSeen), teamMachine(s.Email, s.Machine, s.Own))
 		}
 	}
 
@@ -508,6 +508,18 @@ func teamWho(email, machine string, own bool) string {
 	// org. The machine is what every session said about itself before any of
 	// this existed, and it is still worth more than dropping the row.
 	return machine
+}
+
+// teamMachine is the trailing "· machine" on a row that has already named
+// its owner. It is empty when the owner IS that machine: a session the
+// server could not trace to a person falls back to the machine name, and
+// "buildbox · last seen 5d ago · buildbox" says nothing the row did not
+// already say. A named holder still ends with the box the work is on.
+func teamMachine(email, machine string, own bool) string {
+	if machine == "" || teamWho(email, machine, own) == machine {
+		return ""
+	}
+	return " · " + machine
 }
 
 func teamIssue(ref, title string) string {
