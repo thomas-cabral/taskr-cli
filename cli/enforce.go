@@ -97,12 +97,33 @@ const nudgeCommand = "taskr skill nudge 2>/dev/null || true"
 var claudeHooks = []struct {
 	Event   string
 	Command string
+	// Matcher narrows which occurrences of Event fire the command, empty
+	// meaning all of them. Only SessionStart has anything to narrow.
+	Matcher string
 }{
-	{"SessionStart", nudgeCommand},
-	{"Stop", "taskr touch 2>/dev/null || true"},
-	{"UserPromptSubmit", "taskr touch 2>/dev/null || true"},
-	{"SessionEnd", "taskr park --auto 2>/dev/null || true"},
+	{"SessionStart", nudgeCommand, sessionStartSources},
+	{"Stop", "taskr touch 2>/dev/null || true", ""},
+	{"UserPromptSubmit", "taskr touch 2>/dev/null || true", ""},
+	{"SessionEnd", "taskr park --auto 2>/dev/null || true", ""},
 }
+
+// sessionStartSources is which SessionStart occurrences get the nudge. Claude
+// Code fires the event with a source of startup, resume, clear or compact,
+// and a matcher-less entry takes all four — which is what taskr planted, and
+// which meant a compaction re-injected the directive mid-task (TSK-249).
+//
+// compact is deliberately absent. The other three are a cold agent that has
+// never oriented: the imperative is the point, and the SKILL.md load buys
+// something. A compacted agent is mid-task and already knows what taskr is —
+// what it lost is its own state, not the command reference — so re-reading
+// the whole skill is the expensive half of a cheap need, and the gating in
+// TSK-247 cannot help because the repo is tracked.
+//
+// That leaves nothing said at all after a compaction, which is the right
+// floor and probably not the end of it: a short line naming the active
+// session and its issue would serve, and orientation is not what it should
+// say.
+const sessionStartSources = "startup|resume|clear"
 
 // enforceResult is one shim written for one harness, and what happened.
 type enforceResult struct {
@@ -262,13 +283,36 @@ func enforceClaudeHooks(path string, dryRun bool) (string, error) {
 				return "", fmt.Errorf("%s has a \"%s\" entry that is not an array — refusing to rewrite it", path, h.Event)
 			}
 		}
-		if claudeHookPresent(entries, h.Command) {
+		entry := claudeHookEntry(entries, h.Command)
+		if entry == nil {
+			planted := map[string]any{
+				"hooks": []any{map[string]any{"type": "command", "command": h.Command}},
+			}
+			if h.Matcher != "" {
+				planted["matcher"] = h.Matcher
+			}
+			hooks[h.Event] = append(entries, planted)
+			changed = true
 			continue
 		}
-		hooks[h.Event] = append(entries, map[string]any{
-			"hooks": []any{map[string]any{"type": "command", "command": h.Command}},
-		})
-		changed = true
+		// The entry is already there, and on an upgrade it is there with the
+		// matcher the PREVIOUS taskr wanted — every install before TSK-249
+		// carries a SessionStart entry with none at all, which fires on
+		// compaction. Leaving it would mean the fix reached only machines
+		// that had never run enforce.
+		//
+		// Only taskr's own untouched entry is corrected: claudeHookEntry
+		// matched the command exactly, and soleHook checks nothing else was
+		// merged into the same group, so this never changes when somebody
+		// else's hook fires.
+		if got, _ := entry["matcher"].(string); got != h.Matcher && soleHook(entry, h.Command) {
+			if h.Matcher == "" {
+				delete(entry, "matcher")
+			} else {
+				entry["matcher"] = h.Matcher
+			}
+			changed = true
+		}
 	}
 	if !changed {
 		return "unchanged", nil
@@ -295,11 +339,15 @@ func enforceClaudeHooks(path string, dryRun bool) (string, error) {
 	return status, nil
 }
 
-// claudeHookPresent reports whether one of Claude Code's hook entries already
-// runs command. The shape is nested — a list of matchers, each with its own
-// list of hooks — and anything in it that is not the shape this expects is
-// skipped rather than rewritten, since it is the user's file and not taskr's.
-func claudeHookPresent(entries []any, command string) bool {
+// claudeHookEntry returns the one of Claude Code's hook entries that already
+// runs command, or nil. The shape is nested — a list of matchers, each with
+// its own list of hooks — and anything in it that is not the shape this
+// expects is skipped rather than rewritten, since it is the user's file and
+// not taskr's.
+//
+// It returns the entry rather than a bool so the caller can correct the
+// matcher on an entry taskr planted under an older version.
+func claudeHookEntry(entries []any, command string) map[string]any {
 	for _, entry := range entries {
 		m, ok := entry.(map[string]any)
 		if !ok {
@@ -308,11 +356,23 @@ func claudeHookPresent(entries []any, command string) bool {
 		inner, _ := m["hooks"].([]any)
 		for _, h := range inner {
 			if hm, ok := h.(map[string]any); ok && hm["command"] == command {
-				return true
+				return m
 			}
 		}
 	}
-	return false
+	return nil
+}
+
+// soleHook reports whether command is the only thing entry runs. A matcher
+// governs every hook in its group, so taskr may rewrite one only where
+// nothing but taskr's own command would change firing behaviour.
+func soleHook(entry map[string]any, command string) bool {
+	inner, _ := entry["hooks"].([]any)
+	if len(inner) != 1 {
+		return false
+	}
+	hm, ok := inner[0].(map[string]any)
+	return ok && hm["command"] == command
 }
 
 // enforceMarkedBlock puts the directive between the taskr markers in an

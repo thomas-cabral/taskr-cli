@@ -548,3 +548,131 @@ func TestNudgeInAnAmbiguousRepoDemandsTheSkill(t *testing.T) {
 		t.Errorf("an ambiguous checkout got the untracked directive:\n%s", got)
 	}
 }
+
+// hookMatchers reads back the matcher on every hook entry of one event,
+// keyed by the command it runs. A missing "matcher" key reads as "".
+func hookMatchers(t *testing.T, path, event string) map[string]string {
+	t.Helper()
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var settings struct {
+		Hooks map[string][]struct {
+			Matcher string `json:"matcher"`
+			Hooks   []struct {
+				Command string `json:"command"`
+			} `json:"hooks"`
+		} `json:"hooks"`
+	}
+	if err := json.Unmarshal(raw, &settings); err != nil {
+		t.Fatalf("settings are not valid JSON after enforce: %v", err)
+	}
+	out := map[string]string{}
+	for _, entry := range settings.Hooks[event] {
+		for _, h := range entry.Hooks {
+			out[h.Command] = entry.Matcher
+		}
+	}
+	return out
+}
+
+// TestEnforcePlantsTheNudgeWithoutCompact is TSK-249. Claude Code fires
+// SessionStart with a source of startup, resume, clear or compact, and a
+// matcher-less entry takes all four — so a compaction re-injected the
+// imperative directive and the agent reloaded SKILL.md mid-task.
+func TestEnforcePlantsTheNudgeWithoutCompact(t *testing.T) {
+	home := t.TempDir()
+	if _, _, code := runEnforce(t, homeEnv(home)); code != 0 {
+		t.Fatalf("enforce exited %d", code)
+	}
+	claude, _, _ := enforcedPaths(home)
+	got := hookMatchers(t, claude, "SessionStart")[nudgeCommand]
+	if got != sessionStartSources {
+		t.Fatalf("SessionStart matcher = %q, want %q", got, sessionStartSources)
+	}
+	if strings.Contains(got, "compact") {
+		t.Errorf("the nudge still fires on a compaction: %q", got)
+	}
+	for _, want := range []string{"startup", "resume", "clear"} {
+		if !strings.Contains(got, want) {
+			t.Errorf("matcher %q drops %s — a cold agent still needs the directive", got, want)
+		}
+	}
+}
+
+// TestEnforceLivenessHooksTakeNoMatcher: touch and the auto-park have nothing
+// to narrow, and a matcher on them would silently stop them firing.
+func TestEnforceLivenessHooksTakeNoMatcher(t *testing.T) {
+	home := t.TempDir()
+	if _, _, code := runEnforce(t, homeEnv(home)); code != 0 {
+		t.Fatalf("enforce exited %d", code)
+	}
+	claude, _, _ := enforcedPaths(home)
+	for _, event := range []string{"Stop", "UserPromptSubmit", "SessionEnd"} {
+		for command, matcher := range hookMatchers(t, claude, event) {
+			if matcher != "" {
+				t.Errorf("%s hook %q carries matcher %q, want none", event, command, matcher)
+			}
+		}
+	}
+}
+
+// TestEnforceAddsTheMatcherToAnAlreadyPlantedNudge is the upgrade path, and
+// the whole reach of the fix: every install predating TSK-249 carries a
+// SessionStart entry with taskr's command and no matcher. Matching by command
+// alone would call it present and leave it firing on compaction forever.
+func TestEnforceAddsTheMatcherToAnAlreadyPlantedNudge(t *testing.T) {
+	home := t.TempDir()
+	claude, _, _ := enforcedPaths(home)
+	if err := os.MkdirAll(filepath.Dir(claude), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	seed := `{"hooks":{"SessionStart":[{"hooks":[{"type":"command","command":"` + nudgeCommand + `"}]}]}}`
+	if err := os.WriteFile(claude, []byte(seed), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, code := runEnforce(t, homeEnv(home)); code != 0 {
+		t.Fatalf("enforce exited %d", code)
+	}
+	raw, err := os.ReadFile(claude)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Counted on the bare verb: MarshalIndent escapes the command's ">" to
+	// \u003e, so the literal nudgeCommand never appears in the file.
+	if n := strings.Count(string(raw), "taskr skill nudge"); n != 1 {
+		t.Fatalf("nudge appears %d times, want 1 — enforce duplicated the entry instead of correcting it:\n%s", n, raw)
+	}
+	if got := hookMatchers(t, claude, "SessionStart")[nudgeCommand]; got != sessionStartSources {
+		t.Errorf("matcher = %q after upgrading a matcher-less entry, want %q", got, sessionStartSources)
+	}
+}
+
+// TestEnforceLeavesAMatcherAloneWhenSomethingElseSharesTheGroup: a matcher
+// governs every hook beside it. Where a user merged their own command into
+// taskr's entry, rewriting the matcher would change when THEIR hook fires,
+// and this file is theirs.
+func TestEnforceLeavesAMatcherAloneWhenSomethingElseSharesTheGroup(t *testing.T) {
+	home := t.TempDir()
+	claude, _, _ := enforcedPaths(home)
+	if err := os.MkdirAll(filepath.Dir(claude), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	seed := `{"hooks":{"SessionStart":[{"hooks":[` +
+		`{"type":"command","command":"` + nudgeCommand + `"},` +
+		`{"type":"command","command":"echo mine"}]}]}}`
+	if err := os.WriteFile(claude, []byte(seed), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, code := runEnforce(t, homeEnv(home)); code != 0 {
+		t.Fatalf("enforce exited %d", code)
+	}
+	if got := hookMatchers(t, claude, "SessionStart")[nudgeCommand]; got != "" {
+		t.Errorf("matcher = %q on a group carrying someone else's hook, want it untouched", got)
+	}
+	raw, _ := os.ReadFile(claude)
+	if !strings.Contains(string(raw), "echo mine") {
+		t.Errorf("enforce dropped the user's own hook:\n%s", raw)
+	}
+}
