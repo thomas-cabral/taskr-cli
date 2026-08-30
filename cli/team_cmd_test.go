@@ -114,11 +114,18 @@ func TestTeamAllWidensPastTheCurrentProject(t *testing.T) {
 
 // A holder the server could not name renders as its machine rather than
 // being dropped: "somebody on laptop" is still the fact the reader needs.
+// The machine stands in for the person there, so a row must not then repeat
+// it as the box the work is on — "buildbox · last seen 1h ago · buildbox"
+// (TSK-241). A row that DOES name a person still ends with its machine.
 func TestTeamNamesAnUnidentifiedSessionByItsMachine(t *testing.T) {
 	t.Chdir(t.TempDir())
 	srv := teamServer(t, `{"on_it_now":[{"session_id":"s-1","machine":"buildbox","agent":"claude-code",
 	 "issue_ref":"TSK-9","issue_title":"nameless","started_at":"2026-08-29T10:00:00Z","last_seen":"2026-08-29T11:00:00Z","own":false}],
-	 "gone_quiet":[],"waiting_for_pickup":[],"recent_parks":[]}`, nil)
+	 "gone_quiet":[{"session_id":"s-2","machine":"buildbox","agent":"claude-code",
+	 "issue_ref":"TSK-10","issue_title":"nameless and quiet","started_at":"2026-08-29T06:00:00Z","last_seen":"2026-08-29T07:00:00Z","own":false},
+	 {"session_id":"s-3","email":"bob@example.com","machine":"desktop","agent":"claude-code",
+	 "issue_ref":"TSK-11","issue_title":"named and quiet","started_at":"2026-08-29T06:00:00Z","last_seen":"2026-08-29T07:00:00Z","own":false}],
+	 "waiting_for_pickup":[],"recent_parks":[]}`, nil)
 	defer srv.Close()
 
 	var out, errb bytes.Buffer
@@ -126,7 +133,36 @@ func TestTeamNamesAnUnidentifiedSessionByItsMachine(t *testing.T) {
 	if code := Run([]string{"team"}, &out, &errb, env); code != 0 {
 		t.Fatalf("exit %d, stderr: %s", code, errb.String())
 	}
-	if !strings.Contains(out.String(), "TSK-9 nameless — buildbox") {
-		t.Errorf("an unnamed session was dropped or mislabelled:\n%s", out.String())
+	text := out.String()
+	if !strings.Contains(text, "TSK-9 nameless — buildbox") {
+		t.Errorf("an unnamed session was dropped or mislabelled:\n%s", text)
 	}
+	// The gone-quiet row names the box once, as its owner, and stops there.
+	quiet := teamRow(t, text, "TSK-10")
+	if !strings.HasPrefix(quiet, "TSK-10 nameless and quiet — buildbox · last seen ") {
+		t.Errorf("an unnamed stale session was mislabelled: %q", quiet)
+	}
+	if n := strings.Count(quiet, "buildbox"); n != 1 {
+		t.Errorf("an unnamed stale session named its machine %d times: %q", n, quiet)
+	}
+	// A holder with an address still gets the machine as the trailing fact.
+	named := teamRow(t, text, "TSK-11")
+	if !strings.HasPrefix(named, "TSK-11 named and quiet — bob@example.com · last seen ") ||
+		!strings.HasSuffix(named, " · desktop") {
+		t.Errorf("a named stale session lost the machine it was on: %q", named)
+	}
+}
+
+// teamRow returns the one output line mentioning ref, trimmed. The rows carry
+// live ages ("1d ago"), so a test reads the parts around them rather than
+// pinning a clock the command does not take.
+func teamRow(t *testing.T, text, ref string) string {
+	t.Helper()
+	for _, line := range strings.Split(text, "\n") {
+		if strings.Contains(line, ref+" ") {
+			return strings.TrimSpace(line)
+		}
+	}
+	t.Fatalf("no row for %s:\n%s", ref, text)
+	return ""
 }
